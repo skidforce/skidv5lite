@@ -1,6 +1,6 @@
-# SkidV5
+# SkidV5 Lite
 
-A Roblox client for BedWars and more, based on Vape V4.
+A Roblox client for BedWars and more, based on Vape V4. Lite edition: all Blatant modules have been removed, leaving only the legit modules.
 
 ## Credits
 

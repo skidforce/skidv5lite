@@ -814,11 +814,6 @@ mainapi:CreateCategory({
 	Size = UDim2.fromOffset(16, 15)
 })
 mainapi:CreateCategory({
-	Name = 'Blatant',
-	Icon = getcustomasset('skidv5/assets/liquidbounce/blatant.png'),
-	Size = UDim2.fromOffset(15, 15)
-})
-mainapi:CreateCategory({
 	Name = 'Render',
 	Icon = getcustomasset('skidv5/assets/liquidbounce/render.png'),
 	Size = UDim2.fromOffset(15, 9)

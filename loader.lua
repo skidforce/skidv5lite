@@ -121,7 +121,7 @@ end
 local function downloadProfilesListing(body, commit, onProgress)
 	local files = {}
 	for _, v in body do
-		if v.type == 'file' then
+		if v.type == 'file' and not v.name:match('^blatant') then
 			table.insert(files, v)
 		end
 	end
@@ -1065,7 +1065,7 @@ if firstRunProfiles and not declinedDownload then
 	console:SetProgress(0.47)
 	local ok, res = pcall(function()
 		return console:Ask('Would you like to download the latest config?', {
-			{text = 'Yes', key = true, tooltip = 'Downloads the Blatant and Legit configs from GitHub'},
+			{text = 'Yes', key = true, tooltip = 'Downloads the configs from GitHub'},
 			{text = 'No', key = false, tooltip = 'Starts on default settings and stops asking on future runs'}
 		}, 60, true)
 	end)
@@ -1133,10 +1133,10 @@ if not firstRunProfiles and not declinedDownload and not isReload then
 			-- Read BEFORE anything is overwritten. <GameId>.gui.txt holds `Profile` -- the
 			-- config currently equipped -- and the sync rewrites that file from the repo's
 			-- copy, whose Profile is whatever happened to be equipped when it was committed
-			-- ('blatant', in the version shipping today). mergeGuiState carries the local
+			-- ('legit', in the version shipping today). mergeGuiState carries the local
 			-- value across, but on any decode failure it falls back to writing the incoming
-			-- file verbatim, and that fallback is exactly how someone on 'legit' or on a
-			-- config they made themselves comes back up on 'blatant'. Re-applying the name
+			-- file verbatim, and that fallback is exactly how someone on a config they made
+			-- themselves comes back up on 'legit'. Re-applying the name
 			-- below makes the equipped config survive the sync whether the merge held or not.
 			local lastProfile
 			pcall(function()
@@ -1182,8 +1182,8 @@ if not firstRunProfiles and not declinedDownload and not isReload then
 			if console:IsAborted() then deleteInstall() return end
 
 			-- Hand the equipped config back to the load that is about to happen. This covers
-			-- a config the user made themselves and 'legit' alike -- and 'blatant' and
-			-- 'default' too, since the shipped gui.txt names one of them and a user sitting
+			-- a config the user made themselves and 'legit' alike -- and 'default' too,
+			-- since the shipped gui.txt names one of them and a user sitting
 			-- on either would otherwise be indistinguishable from one who got reset onto it.
 			-- finishLoading in main.lua treats this as a one-shot and clears it, so it steers
 			-- only the load that follows this sync and does not leak into later reinjects.
@@ -1199,27 +1199,12 @@ if not firstRunProfiles and not declinedDownload and not isReload then
 end
 console:SetProgress(0.73)
 
--- Step 3: after the shipped configs finish downloading, ask which one should load by default
--- and hand it to the GUI via shared.VapeCustomProfile. main.lua's finishLoading passes this
--- straight into vape:Load as the profile to load, replacing the 'default' profile. The keys
--- match the profile file name prefixes (e.g. blatant<PlaceId>.txt) so Load can find the file.
+-- Step 3: after the shipped configs finish downloading, hand the default one to the GUI via
+-- shared.VapeCustomProfile. main.lua's finishLoading passes this straight into vape:Load as the
+-- profile to load, replacing the 'default' profile. The keys match the profile file name
+-- prefixes (e.g. legit<PlaceId>.txt) so Load can find the file.
 if downloadedConfigs then
-	-- No fallback: only an explicit button click may force a config. This used to
-	-- default to 'blatant' -- on a timeout (user tabbed away for 120s) or on the
-	-- headless console (which answers every Ask with the fallback instantly) that
-	-- silently stamped 'blatant' into shared.VapeCustomProfile, overriding the
-	-- profile saved in gui.txt without the user ever choosing it. With nil the
-	-- type(choice) guard below skips the override and the saved profile decides.
-	local ok, choice = pcall(function()
-		return console:Ask('Which config would you like to load by default?', {
-			{text = 'Blatant', key = 'blatant', tooltip = 'Makes Blatant your default config: everything on, obvious'},
-			{text = 'Legit', key = 'legit', tooltip = 'Makes Legit your default config: toned down to look normal'}
-		}, 120, nil)
-	end)
-	if console:IsAborted() then deleteInstall() return end
-	if ok and type(choice) == 'string' then
-		shared.VapeCustomProfile = choice
-	end
+	shared.VapeCustomProfile = 'legit'
 end
 
 console:SetProgress(0.8)

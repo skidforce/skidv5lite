@@ -2174,11 +2174,6 @@ local combat = mainapi:CreateCategory({
 	Icon = getcustomasset('skidv5/assets/old/combaticon.png')
 })
 mainapi:CreateCategory({
-	Name = 'Blatant',
-	Icon = getcustomasset('skidv5/assets/old/blatanticon.png'),
-	WindowSize = 164
-})
-mainapi:CreateCategory({
 	Name = 'Render',
 	Icon = getcustomasset('skidv5/assets/old/rendericon.png'),
 	WindowSize = 196
@@ -2490,15 +2485,14 @@ topbar:CreateButton({
 		local priority = {
 			GUICategory = 1,
 			CombatCategory = 2,
-			BlatantCategory = 3,
-			RenderCategory = 4,
-			UtilityCategory = 5,
-			WorldCategory = 6,
-			InventoryCategory = 7,
-			MinigamesCategory = 8,
-			LegitCategory = 9,
-			FriendsCategory = 10,
-			ProfilesCategory = 11
+			RenderCategory = 3,
+			UtilityCategory = 4,
+			WorldCategory = 5,
+			InventoryCategory = 6,
+			MinigamesCategory = 7,
+			LegitCategory = 8,
+			FriendsCategory = 9,
+			ProfilesCategory = 10
 		}
 		local categories = {}
 		for _, v in mainapi.Categories do

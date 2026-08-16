@@ -2713,11 +2713,6 @@ mainapi:CreateCategory({
 	RiseIcon = 'a'
 })
 mainapi:CreateCategory({
-	Name = 'Movement',
-	RealName = 'Blatant',
-	RiseIcon = 'b'
-})
-mainapi:CreateCategory({
 	Name = 'Player',
 	RealName = 'Utility',
 	RiseIcon = 'c'
@@ -2784,8 +2779,8 @@ end
 
 -- Being on the latest commit is not enough on its own: the sync exists to put both shipped
 -- configs for this place on disk, so a missing one has to let it through regardless.
-local function hasBothConfigs()
-	return isfile('skidv5/profiles/blatant'..mainapi.Place..'.txt') and isfile('skidv5/profiles/legit'..mainapi.Place..'.txt')
+local function hasLegitConfig()
+	return isfile('skidv5/profiles/legit'..mainapi.Place..'.txt')
 end
 
 -- Pinned to the commit the check reported rather than to the branch path: raw.githubusercontent
@@ -2850,7 +2845,7 @@ local function downloadProfiles(commit)
 
 	local files = {}
 	for _, v in body do
-		if v.type == 'file' then
+		if v.type == 'file' and not v.name:match('^blatant') then
 			table.insert(files, v)
 		end
 	end
@@ -2936,7 +2931,7 @@ do
 		-- moved. GitHub allows 60 unauthenticated API calls an hour and a few reinjects can spend
 		-- that, so a folder that is already current is turned away before the listing request.
 		local latest = latestProfileCommit()
-		if latest and latest == localProfileCommit() and hasBothConfigs() then
+		if latest and latest == localProfileCommit() and hasLegitConfig() then
 			syncing = false
 			synctitle.Text = 'Profiles already up to date'
 			mainapi:CreateNotification('SkidV5', 'Profiles are already on the latest commit, nothing to sync.', 10)
@@ -2972,7 +2967,7 @@ do
 		pending, syncmessage = true, message
 		synctitle.Text = 'Synced, choose a config'
 		refreshConfigButtons()
-		mainapi:CreateNotification('SkidV5', message..' Choose Blatant or Legit below to load one.', 10)
+		mainapi:CreateNotification('SkidV5', message..' Choose a config below to load one.', 10)
 	end)
 
 	-- Which shipped config loads by default. There is nothing extra to persist: the default is
@@ -3088,7 +3083,7 @@ do
 		end
 	end
 
-	for index, config in {{Key = 'blatant', Text = 'Blatant'}, {Key = 'legit', Text = 'Legit'}} do
+	for index, config in {{Key = 'legit', Text = 'Legit'}} do
 		local name = config.Key
 		local button = Instance.new('TextButton')
 		button.Name = name

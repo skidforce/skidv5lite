@@ -5921,11 +5921,6 @@ mainapi:CreateCategory({
 	Size = UDim2.fromOffset(13, 14)
 })
 mainapi:CreateCategory({
-	Name = 'Blatant',
-	Icon = getcustomasset('skidv5/assets/new/blatanticon.png'),
-	Size = UDim2.fromOffset(14, 14)
-})
-mainapi:CreateCategory({
 	Name = 'Render',
 	Icon = getcustomasset('skidv5/assets/new/rendericon.png'),
 	Size = UDim2.fromOffset(15, 14)
@@ -6055,8 +6050,8 @@ end
 
 -- Being on the latest commit is not enough on its own: the sync exists to put both shipped
 -- configs for this place on disk, so a missing one has to let it through regardless.
-local function hasBothConfigs()
-	return isfile('skidv5/profiles/blatant'..mainapi.Place..'.txt') and isfile('skidv5/profiles/legit'..mainapi.Place..'.txt')
+local function hasLegitConfig()
+	return isfile('skidv5/profiles/legit'..mainapi.Place..'.txt')
 end
 
 -- Pinned to the commit the check reported rather than to the branch path: raw.githubusercontent
@@ -6121,7 +6116,7 @@ local function downloadProfiles(commit)
 
 	local files = {}
 	for _, v in body do
-		if v.type == 'file' then
+		if v.type == 'file' and not v.name:match('^blatant') then
 			table.insert(files, v)
 		end
 	end
@@ -6203,7 +6198,7 @@ do
 		-- moved. GitHub allows 60 unauthenticated API calls an hour and a few reinjects can spend
 		-- that, so a folder that is already current is turned away before the listing request.
 		local latest = latestProfileCommit()
-		if latest and latest == localProfileCommit() and hasBothConfigs() then
+		if latest and latest == localProfileCommit() and hasLegitConfig() then
 			syncing = false
 			syncbutton.Text = 'Profiles already up to date'
 			mainapi:CreateNotification('SkidV5', 'Profiles are already on the latest commit, nothing to sync.', 10)
@@ -6239,7 +6234,7 @@ do
 		pending, syncmessage = true, message
 		syncbutton.Text = 'Synced, choose a config'
 		refreshConfigButtons()
-		mainapi:CreateNotification('SkidV5', message..' Choose Blatant or Legit below to load one.', 10)
+		mainapi:CreateNotification('SkidV5', message..' Choose a config below to load one.', 10)
 	end)
 
 	-- Which shipped config loads by default. There is nothing extra to persist: the default is
@@ -6338,7 +6333,7 @@ do
 		end
 	end
 
-	for index, config in {{Key = 'blatant', Text = 'Blatant'}, {Key = 'legit', Text = 'Legit'}} do
+	for index, config in {{Key = 'legit', Text = 'Legit'}} do
 		local name = config.Key
 		local button = Instance.new('TextButton')
 		button.Name = name
@@ -6622,14 +6617,13 @@ guipane:CreateButton({
 		local priority = {
 			GUICategory = 1,
 			CombatCategory = 2,
-			BlatantCategory = 3,
-			RenderCategory = 4,
-			UtilityCategory = 5,
-			WorldCategory = 6,
-			InventoryCategory = 7,
-			MinigamesCategory = 8,
-			FriendsCategory = 9,
-			ProfilesCategory = 10
+			RenderCategory = 3,
+			UtilityCategory = 4,
+			WorldCategory = 5,
+			InventoryCategory = 6,
+			MinigamesCategory = 7,
+			FriendsCategory = 8,
+			ProfilesCategory = 9
 		}
 		local categories = {}
 		for _, v in mainapi.Categories do

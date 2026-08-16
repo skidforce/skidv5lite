@@ -3868,11 +3868,6 @@ mainapi:CreateCategory({
 	Size = UDim2.fromOffset(13, 14)
 })
 mainapi:CreateCategory({
-	Name = 'Blatant',
-	Icon = getcustomasset('skidv5/assets/new/blatanticon.png'),
-	Size = UDim2.fromOffset(14, 14)
-})
-mainapi:CreateCategory({
 	Name = 'Render',
 	Icon = getcustomasset('skidv5/assets/new/rendericon.png'),
 	Size = UDim2.fromOffset(15, 14)
@@ -4180,14 +4175,13 @@ guipane:CreateButton({
 		local priority = {
 			GUICategory = 1,
 			CombatCategory = 2,
-			BlatantCategory = 3,
-			RenderCategory = 4,
-			UtilityCategory = 5,
-			WorldCategory = 6,
-			InventoryCategory = 7,
-			MinigamesCategory = 8,
-			FriendsCategory = 9,
-			ProfilesCategory = 10
+			RenderCategory = 3,
+			UtilityCategory = 4,
+			WorldCategory = 5,
+			InventoryCategory = 6,
+			MinigamesCategory = 7,
+			FriendsCategory = 8,
+			ProfilesCategory = 9
 		}
 		local categories = {}
 		for _, v in mainapi.Categories do

@@ -1553,11 +1553,6 @@ mainapi:CreateCategory({
 	RiseIcon = 'a'
 })
 mainapi:CreateCategory({
-	Name = 'Movement',
-	RealName = 'Blatant',
-	RiseIcon = 'b'
-})
-mainapi:CreateCategory({
 	Name = 'Player',
 	RealName = 'Utility',
 	RiseIcon = 'c'
