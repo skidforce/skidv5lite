@@ -5460,7 +5460,7 @@ function mainapi:Load(skipgui, profile)
 		guidata = loadJson('skidv5/profiles/'..game.GameId..'.gui.txt')
 		if not guidata then
 			guidata = {Categories = {}}
-			self:CreateNotification('SkidV5', 'Failed to load GUI settings.', 10, 'alert')
+			self:CreateNotification('SkidV5 Lite', 'Failed to load GUI settings.', 10, 'alert')
 			savecheck = false
 		end
 
@@ -5512,7 +5512,7 @@ function mainapi:Load(skipgui, profile)
 		local savedata = loadJson('skidv5/profiles/'..self.Profile..self.Place..'.txt')
 		if not savedata then
 			savedata = {Categories = {}, Modules = {}, Legit = {}}
-			self:CreateNotification('SkidV5', 'Failed to load '..self.Profile..' profile.', 10, 'alert')
+			self:CreateNotification('SkidV5 Lite', 'Failed to load '..self.Profile..' profile.', 10, 'alert')
 			savecheck = false
 		end
 
@@ -6201,7 +6201,7 @@ do
 		if latest and latest == localProfileCommit() and hasLegitConfig() then
 			syncing = false
 			syncbutton.Text = 'Profiles already up to date'
-			mainapi:CreateNotification('SkidV5', 'Profiles are already on the latest commit, nothing to sync.', 10)
+			mainapi:CreateNotification('SkidV5 Lite', 'Profiles are already on the latest commit, nothing to sync.', 10)
 			return
 		end
 
@@ -6214,7 +6214,7 @@ do
 		syncing = false
 		if not synced then
 			syncbutton.Text = 'Sync to current profiles'
-			mainapi:CreateNotification('SkidV5', message, 10, 'alert')
+			mainapi:CreateNotification('SkidV5 Lite', message, 10, 'alert')
 			return
 		end
 		-- Stamped only once the files are down, and only when the commit was readable in the first
@@ -6234,7 +6234,7 @@ do
 		pending, syncmessage = true, message
 		syncbutton.Text = 'Synced, choose a config'
 		refreshConfigButtons()
-		mainapi:CreateNotification('SkidV5', message..' Choose a config below to load one.', 10)
+		mainapi:CreateNotification('SkidV5 Lite', message..' Choose a config below to load one.', 10)
 	end)
 
 	-- Which shipped config loads by default. There is nothing extra to persist: the default is
@@ -6287,7 +6287,7 @@ do
 
 	local function selectConfig(name)
 		if not isfile('skidv5/profiles/'..name..mainapi.Place..'.txt') then
-			mainapi:CreateNotification('SkidV5', 'There is no '..name..' config for this game yet, press Sync to current profiles first.', 10, 'alert')
+			mainapi:CreateNotification('SkidV5 Lite', 'There is no '..name..' config for this game yet, press Sync to current profiles first.', 10, 'alert')
 			return
 		end
 		-- Always a full reload, never an in-place profile switch. The GUI theme colour, window

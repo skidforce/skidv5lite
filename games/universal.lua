@@ -1,7 +1,7 @@
 local loadstring = function(...)
 	local res, err = loadstring(...)
 	if err and vape then
-		vape:CreateNotification('SkidV5', 'Failed to load : '..err, 30, 'alert')
+		vape:CreateNotification('SkidV5 Lite', 'Failed to load : '..err, 30, 'alert')
 	end
 	return res
 end
@@ -162,7 +162,7 @@ local function serverHop(pointer, filter)
 		table.insert(visited, game.JobId)
 	end
 	if not pointer then
-		notif('SkidV5', 'Searching for an available server.', 2)
+		notif('SkidV5 Lite', 'Searching for an available server.', 2)
 	end
 
 	local suc, httpdata = pcall(function()
@@ -175,7 +175,7 @@ local function serverHop(pointer, filter)
 				cacheExpire, cache = tick() + 60, httpdata
 				table.insert(attempted, v.id)
 
-				notif('SkidV5', 'Found! Teleporting.', 5)
+				notif('SkidV5 Lite', 'Found! Teleporting.', 5)
 				teleportService:TeleportToPlaceInstance(game.PlaceId, v.id)
 				return
 			end
@@ -184,10 +184,10 @@ local function serverHop(pointer, filter)
 		if data.nextPageCursor then
 			serverHop(data.nextPageCursor, filter)
 		else
-			notif('SkidV5', 'Failed to find an available server.', 5, 'warning')
+			notif('SkidV5 Lite', 'Failed to find an available server.', 5, 'warning')
 		end
 	else
-		notif('SkidV5', 'Failed to grab servers. ('..(data and data.errors[1].message or 'no data')..')', 5, 'warning')
+		notif('SkidV5 Lite', 'Failed to grab servers. ('..(data and data.errors[1].message or 'no data')..')', 5, 'warning')
 	end
 end
 
@@ -431,7 +431,7 @@ run(function()
 			if self.localprio == 0 then
 				olduninject = vape.Uninject
 				vape.Uninject = function()
-					notif('SkidV5', 'No escaping the private members :)', 10)
+					notif('SkidV5 Lite', 'No escaping the private members :)', 10)
 				end
 			end
 		end

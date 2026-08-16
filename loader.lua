@@ -297,7 +297,9 @@ local SkidLogo = {
 	'    S S S     I   D   D  V V     5',
 	'    S S  S    I   D   D  V V     5',
 	'SSSSS S   S IIIII DDD     V   55555',
-	'====:::====:::====:::====:::===='
+	'====:::====:::====:::====:::====',
+	'',
+	'L I T E'
 }
 
 -- Every offset below is authored against the base window and scaled as a whole by the
@@ -519,7 +521,7 @@ local function createConsole()
 	title.BackgroundTransparency = 1
 	title.Size = UDim2.new(1, -220, 1, 0)
 	title.Position = UDim2.fromOffset(110, 0)
-	title.Text = './skidv5-loader'
+	title.Text = './skidv5lite-loader'
 	title.TextColor3 = Palette.Title
 	title.TextSize = 18
 	title.Font = Enum.Font.Code

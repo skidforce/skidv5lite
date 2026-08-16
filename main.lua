@@ -17,7 +17,7 @@ local vape
 local loadstring = function(...)
 	local res, err = loadstring(...)
 	if err and vape then
-		vape:CreateNotification('SkidV5', 'Failed to load : '..err, 30, 'alert')
+		vape:CreateNotification('SkidV5 Lite', 'Failed to load : '..err, 30, 'alert')
 	end
 	return res
 end
@@ -361,14 +361,14 @@ local function finishLoading()
 				vape:Save()
 			end
 			if not hasQueueOnTeleport then
-				vape:CreateNotification('SkidV5', 'queue_on_teleport is not supported by your executor -- Vape will not re-inject automatically after this teleport (e.g. queueing into a match). You will need to re-run your loadstring manually.', 15, 'alert')
+				vape:CreateNotification('SkidV5 Lite', 'queue_on_teleport is not supported by your executor -- Vape will not re-inject automatically after this teleport (e.g. queueing into a match). You will need to re-run your loadstring manually.', 15, 'alert')
 			end
 			queue_on_teleport(teleportScript)
 		end
 	end))
 
 	if shared.SkidV5SyncResult then
-		vape:CreateNotification('SkidV5', shared.SkidV5SyncResult, 15, shared.SkidV5SyncResult:find('failed') and 'alert' or nil)
+		vape:CreateNotification('SkidV5 Lite', shared.SkidV5SyncResult, 15, shared.SkidV5SyncResult:find('failed') and 'alert' or nil)
 		shared.SkidV5SyncResult = nil
 	end
 
