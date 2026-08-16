@@ -13,7 +13,7 @@ This project would not exist without these amazing open-source projects:
 ## Running
 
 ```lua
-loadstring(game:HttpGet("https://raw.githubusercontent.com/skidforce/skidv5/refs/heads/main/loader.lua", true))()
+loadstring(game:HttpGet("https://raw.githubusercontent.com/skidforce/skidv5lite/refs/heads/main/loader.lua", true))()
 ```
 
 > [!NOTE]
