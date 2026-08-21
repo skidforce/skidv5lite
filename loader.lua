@@ -64,7 +64,7 @@ local function downloadFile(path, func)
 		local content
 		for attempt = 1, 4 do
 			local suc, res = pcall(function()
-				return game:HttpGet('https://raw.githubusercontent.com/skidforce/skidv5/main/'..relPath, true)
+				return game:HttpGet('https://raw.githubusercontent.com/skidforce/skidv5lite/main/'..relPath, true)
 			end)
 			-- For .lua files, a compile check too: an outage can hand back the 503/error page
 			-- as the body, and caching that would poison the install silently (cache-first
@@ -90,7 +90,7 @@ end
 
 local function fetchProfilesListing(ref)
 	local reqSuc, res = pcall(function()
-		return game:HttpGet('https://api.github.com/repos/skidforce/skidv5/contents/profiles'..(ref and ('?ref='..ref) or ''), true)
+		return game:HttpGet('https://api.github.com/repos/skidforce/skidv5lite/contents/profiles'..(ref and ('?ref='..ref) or ''), true)
 	end)
 	if not (reqSuc and res and res ~= '404: Not Found') then return nil end
 	local bodySuc, body = pcall(function()
@@ -134,7 +134,7 @@ local function downloadProfilesListing(body, commit, onProgress)
 				pcall(function()
 					for attempt = 1, 4 do
 						local suc, res = pcall(function()
-							return game:HttpGet('https://raw.githubusercontent.com/skidforce/skidv5/'..commit..'/'..relPath, true)
+							return game:HttpGet('https://raw.githubusercontent.com/skidforce/skidv5lite/'..commit..'/'..relPath, true)
 						end)
 						if suc and res and res ~= '' and res ~= '404: Not Found' then
 							writefile('skidv5/'..relPath, mergeGuiState('skidv5/'..relPath, res))
@@ -166,7 +166,7 @@ end
 
 local function fetchProfilesCommit()
 	local reqSuc, res = pcall(function()
-		return game:HttpGet('https://api.github.com/repos/skidforce/skidv5/commits?path=profiles&sha=main&per_page=1', true)
+		return game:HttpGet('https://api.github.com/repos/skidforce/skidv5lite/commits?path=profiles&sha=main&per_page=1', true)
 	end)
 	if not (reqSuc and res and res ~= '404: Not Found') then return nil end
 	local bodySuc, body = pcall(function()
@@ -180,12 +180,12 @@ local function updateCachedFiles(onProgress)
 	local httpService = cloneref(game:GetService('HttpService'))
 
 	local headSuc, headSha = pcall(function()
-		return httpService:JSONDecode(game:HttpGet('https://api.github.com/repos/skidforce/skidv5/commits?sha=main&per_page=1', true))[1].sha
+		return httpService:JSONDecode(game:HttpGet('https://api.github.com/repos/skidforce/skidv5lite/commits?sha=main&per_page=1', true))[1].sha
 	end)
 	if not (headSuc and type(headSha) == 'string') then return end
 
 	local treeSuc, tree = pcall(function()
-		return httpService:JSONDecode(game:HttpGet('https://api.github.com/repos/skidforce/skidv5/git/trees/'..headSha..'?recursive=1', true))
+		return httpService:JSONDecode(game:HttpGet('https://api.github.com/repos/skidforce/skidv5lite/git/trees/'..headSha..'?recursive=1', true))
 	end)
 	if not (treeSuc and type(tree) == 'table' and type(tree.tree) == 'table') then return end
 
@@ -246,7 +246,7 @@ local function updateCachedFiles(onProgress)
 			task.spawn(function()
 				for attempt = 1, 4 do
 					local suc, res = pcall(function()
-						return game:HttpGet('https://raw.githubusercontent.com/skidforce/skidv5/'..headSha..'/'..select(1, path:gsub(' ', '%%20')), true)
+						return game:HttpGet('https://raw.githubusercontent.com/skidforce/skidv5lite/'..headSha..'/'..select(1, path:gsub(' ', '%%20')), true)
 					end)
 					-- compile check: never overwrite a working cached file with an error page
 					if suc and res and res ~= '' and res ~= '404: Not Found' and loadstring(res) ~= nil then
@@ -991,7 +991,7 @@ local scriptVersion
 pcall(function()
 	for attempt = 1, 4 do
 		local suc, res = pcall(function()
-			return game:HttpGet('https://raw.githubusercontent.com/skidforce/skidv5/main/profiles/version.txt', true)
+			return game:HttpGet('https://raw.githubusercontent.com/skidforce/skidv5lite/main/profiles/version.txt', true)
 		end)
 		if suc and res and res ~= '' and res ~= '404: Not Found' then
 			scriptVersion = res:gsub('%s+$', '')

@@ -28,7 +28,7 @@ elseif not shared.SkidV5Developer then
 	local content
 	for attempt = 1, 4 do
 		local suc, res = pcall(function()
-			return game:HttpGet('https://raw.githubusercontent.com/skidforce/skidv5/main/games/6872274481.lua', true)
+			return game:HttpGet('https://raw.githubusercontent.com/skidforce/skidv5lite/main/games/6872274481.lua', true)
 		end)
 		if suc and res and res ~= '' and res ~= '404: Not Found' then
 			content = res

@@ -1,10 +1,21 @@
+local inputService = game:GetService('UserInputService')
+local textService = game:GetService('TextService')
+local httpService = game:GetService('HttpService')
+local tweenService = game:GetService('TweenService')
+local runService = game:GetService('RunService')
+local gameCamera = workspace.CurrentCamera
+local players = game:GetService('Players')
+
+local fontsize = Instance.new('TextLabel')
+local notifications = Instance.new('Frame')
+local assetfunction = getcustomasset
+if not pcall(getcustomasset, '') then
+	assetfunction = nil
+end
+
 local mainapi = {
 	Categories = {},
-	GUIColor = {
-		Hue = 0.46,
-		Sat = 0.96,
-		Value = 0.52
-	},
+	GUIColor = {},
 	HeldKeybinds = {},
 	Keybind = {'RightShift'},
 	Loaded = false,
@@ -23,39 +34,18 @@ local mainapi = {
 	Windows = {}
 }
 
-local cloneref = cloneref or function(obj)
-	return obj
-end
-local tweenService = cloneref(game:GetService('TweenService'))
-local inputService = cloneref(game:GetService('UserInputService'))
-local textService = cloneref(game:GetService('TextService'))
-local guiService = cloneref(game:GetService('GuiService'))
-local runService = cloneref(game:GetService('RunService'))
-local httpService = cloneref(game:GetService('HttpService'))
-local gameCamera = cloneref(workspace.CurrentCamera or game:GetService('Workspace').CurrentCamera)
-
-local fontsize = Instance.new('GetTextBoundsParams')
-fontsize.Width = math.huge
-local notifications
-local assetfunction = getcustomasset
-local getcustomasset
-local clickgui
-local scaledgui
-local toolblur
-local tooltip
-local scale
-local gui
+local clickgui, contentcontainer, settingspane, sidebarlist, tabbar
 
 local color = {}
 local tween = {
-	tweens = {},
-	tweenstwo = {}
+	Tween = tweenService.Create,
+	tweenstwo = TweenInfo.new(0.1)
 }
 local uipallet = {
 	Main = Color3.fromRGB(26, 25, 26),
 	Text = Color3.fromRGB(200, 200, 200),
-	Font = Font.fromEnum(Enum.Font.Arial),
-	FontSemiBold = Font.fromEnum(Enum.Font.Arial, Enum.FontWeight.SemiBold),
+	Font = Font.new('Arial'),
+	FontSemiBold = Font.new('Arial SemiBold'),
 	Tween = TweenInfo.new(0.16, Enum.EasingStyle.Linear)
 }
 
@@ -132,11 +122,14 @@ local isfile = isfile or function(file)
 	return suc and res ~= nil and res ~= ''
 end
 
-local getfontsize = function(text, size, font)
+local getfontsize = function(text, size, font, bounds)
 	fontsize.Text = text
 	fontsize.Size = size
 	if typeof(font) == 'Font' then
 		fontsize.Font = font
+	end
+	if bounds then
+		fontsize.MaxSize = bounds
 	end
 	return textService:GetTextBoundsAsync(fontsize)
 end
@@ -311,12 +304,6 @@ local function createMobileButton(buttonapi, position)
 	buttonapi.Bind = {Button = button}
 end
 
--- Empty counts as missing. The executor's real isfile reports a zero-byte file as present, so a
--- write interrupted by a cancel, crash or teleport leaves a truncated asset that this function
--- would otherwise skip re-downloading forever -- and a truncated PNG is what makes the
--- executor's getcustomasset produce an invalid content id, which throws 'ContentId formatting
--- failed' at the assignment and kills the whole GUI. Until this check existed, the only way out
--- of that state was reinstalling the script.
 local function hasContent(path)
 	if not isfile(path) then return false end
 	local ok, body = pcall(readfile, path)
@@ -327,7 +314,7 @@ local function downloadFile(path, func)
 	if not hasContent(path) then
 		createDownloader(path)
 		local suc, res = pcall(function()
-			return game:HttpGet('https://raw.githubusercontent.com/skidforce/skidv5/main/'..select(1, path:gsub('skidv5/', '')), true)
+			return game:HttpGet('https://raw.githubusercontent.com/skidforce/skidv5lite/main/'..select(1, path:gsub('skidv5/', '')), true)
 		end)
 		if not suc or res == '404: Not Found' then
 			error(res)
@@ -340,25 +327,6 @@ local function downloadFile(path, func)
 	return (func or readfile)(path)
 end
 
--- pcall'd: the executor's getcustomasset copies the file into the running client's content
--- directory and then inspects it, so it throws outright when that destination cannot be
--- written -- a pruned or stale Roblox install (bootstrappers that strip the client, or a
--- version folder replaced by an update mid-session) fails every single call. Unguarded, the
--- first throw took the whole GUI chunk with it and injection failed outright rather than
--- losing one icon. getcustomassets holds an uploaded rbxassetid for each of these paths --
--- the same images mobile already runs on -- so falling back to it costs nothing visible.
--- Covers a failed download too, which errors out of downloadFile the same way.
--- What comes back is checked, not just whether the call threw. The pcall above only covers
--- getcustomasset ERRORING; it does nothing about getcustomasset RETURNING something that is not
--- a content URI, and several executors do exactly that -- handing back the raw filesystem path,
--- a truncated string, or a partial result when the copy into the client content directory only
--- half-succeeded. Assigning any of those to .Image throws 'ContentId formatting failed' at the
--- assignment site, which is outside this pcall and outside every other pcall in this file, so a
--- single bad icon took down the whole GUI chunk and surfaced as 'Injection failed: ContentId
--- formatting failed' instead of as one missing image.
---
--- Rejecting a URI that would in fact have worked costs nothing: every path this file asks for
--- has an uploaded id in getcustomassets, so the fallback is the same picture.
 local function usableAsset(value)
 	return type(value) == 'string' and value:match('^rbx%a*://') ~= nil
 end
@@ -389,137 +357,76 @@ local function loadJson(path)
 	local suc, res = pcall(function()
 		return httpService:JSONDecode(readfile(path))
 	end)
-	return suc and type(res) == 'table' and res or nil
+	if suc then return res end
+	return {}
 end
 
-local function makeDraggable(gui, window)
-	gui.InputBegan:Connect(function(inputObj)
-		if window and not window.Visible then return end
-		if
-			(inputObj.UserInputType == Enum.UserInputType.MouseButton1 or inputObj.UserInputType == Enum.UserInputType.Touch)
-			and (inputObj.Position.Y - gui.AbsolutePosition.Y < 40 or window)
-		then
-			local dragPosition = Vector2.new(
-				gui.AbsolutePosition.X - inputObj.Position.X,
-				gui.AbsolutePosition.Y - inputObj.Position.Y + guiService:GetGuiInset().Y
-			) / scale.Scale
-
-			local changed = inputService.InputChanged:Connect(function(input)
-				if input.UserInputType == (inputObj.UserInputType == Enum.UserInputType.MouseButton1 and Enum.UserInputType.MouseMovement or Enum.UserInputType.Touch) then
-					local position = input.Position
-					if inputService:IsKeyDown(Enum.KeyCode.LeftShift) then
-						dragPosition = (dragPosition // 3) * 3
-						position = (position // 3) * 3
-					end
-					gui.Position = UDim2.fromOffset((position.X / scale.Scale) + dragPosition.X, (position.Y / scale.Scale) + dragPosition.Y)
+local function makeDraggable(gui, draggable)
+	draggable = draggable or gui
+	draggable.InputBegan:Connect(function(input)
+		if input.UserInputType == Enum.UserInputType.MouseButton1 or input.UserInputType == Enum.UserInputType.Touch then
+			local dragPos, startPos = input.Position, gui.Position
+			local changed = inputService.InputChanged:Connect(function(i)
+				if i.UserInputType == (input.UserInputType == Enum.UserInputType.MouseButton1 and Enum.UserInputType.MouseMovement or Enum.UserInputType.Touch) then
+					gui.Position = UDim2.fromOffset(
+						startPos.X.Offset + ((i.Position - dragPos).X / scale.Scale),
+						startPos.Y.Offset + ((i.Position - dragPos).Y / scale.Scale)
+					)
 				end
 			end)
-
 			local ended
-			ended = inputObj.Changed:Connect(function()
-				if inputObj.UserInputState == Enum.UserInputState.End then
-					if changed then
-						changed:Disconnect()
-					end
-					if ended then
-						ended:Disconnect()
-					end
+			ended = input.Changed:Connect(function()
+				if input.UserInputState == Enum.UserInputState.End then
+					changed:Disconnect()
+					ended:Disconnect()
 				end
 			end)
 		end
 	end)
 end
 
-local function randomString()
-	local array = {}
-	for i = 1, math.random(10, 100) do
-		array[i] = string.char(math.random(32, 126))
+local function randomString(len)
+	local str = ''
+	for i = 1, len or 10 do
+		str ..= string.char(math.random(97, 122))
 	end
-	return table.concat(array)
+	return str
 end
 
-local function removeTags(str)
-	str = str:gsub('<br%s*/>', '\n')
-	return str:gsub('<[^<>]->', '')
+local function removeTags(text)
+	return tostring(text):gsub('<[^>]+>', '')
 end
 
-do
-	local res = isfile('skidv5/profiles/color.txt') and loadJson('skidv5/profiles/color.txt')
-	if res then
-		uipallet.Main = res.Main and Color3.fromRGB(unpack(res.Main)) or uipallet.Main
-		uipallet.Text = res.Text and Color3.fromRGB(unpack(res.Text)) or uipallet.Text
-		uipallet.Font = res.Font and Font.new(
-			res.Font:find('rbxasset') and res.Font
-			or string.format('rbxasset://fonts/families/%s.json', res.Font)
-		) or uipallet.Font
-		uipallet.FontSemiBold = Font.new(uipallet.Font.Family, Enum.FontWeight.SemiBold)
-	end
-	fontsize.Font = uipallet.Font
+local colorfile = isfile('skidv5/assets/color.txt') and readfile('skidv5/assets/color.txt') or '26,25,26|200,200,200|Arial|Arial SemiBold|0.16|Linear'
+local colorparts = colorfile:split('|')
+local function parseColor(str)
+	local t = str:split(',')
+	return Color3.fromRGB(tonumber(t[1]) or 26, tonumber(t[2]) or 25, tonumber(t[3]) or 26)
+end
+uipallet.Main = parseColor(colorparts[1])
+uipallet.Text = parseColor(colorparts[2])
+uipallet.Font = Font.new(colorparts[3] or 'Arial')
+uipallet.FontSemiBold = Font.new(colorparts[4] or 'Arial SemiBold')
+uipallet.Tween = TweenInfo.new(tonumber(colorparts[5]) or 0.16, Enum.EasingStyle[colorparts[6]] or Enum.EasingStyle.Linear)
+
+color.Dark = function(c, a)
+	return c:Lerp(Color3.new(), a)
+end
+color.Light = function(c, a)
+	return c:Lerp(Color3.new(1, 1, 1), a)
 end
 
-do
-	function color.Dark(col, num)
-		local h, s, v = col:ToHSV()
-		return Color3.fromHSV(h, s, math.clamp(select(3, uipallet.Main:ToHSV()) > 0.5 and v + num or v - num, 0, 1))
-	end
-
-	function color.Light(col, num)
-		local h, s, v = col:ToHSV()
-		return Color3.fromHSV(h, s, math.clamp(select(3, uipallet.Main:ToHSV()) > 0.5 and v - num or v + num, 0, 1))
-	end
-
-	function mainapi:Color(h)
-		local s = 0.75 + (0.15 * math.min(h / 0.03, 1))
-		if h > 0.57 then
-			s = 0.9 - (0.4 * math.min((h - 0.57) / 0.09, 1))
-		end
-		if h > 0.66 then
-			s = 0.5 + (0.4 * math.min((h - 0.66) / 0.16, 1))
-		end
-		if h > 0.87 then
-			s = 0.9 - (0.15 * math.min((h - 0.87) / 0.13, 1))
-		end
-		return h, s, 1
-	end
-
-	function mainapi:TextColor(h, s, v)
-		if v >= 0.7 and (s < 0.6 or h > 0.04 and h < 0.56) then
-			return Color3.new(0.19, 0.19, 0.19)
-		end
-		return Color3.new(1, 1, 1)
-	end
+function mainapi:Color(hue)
+	return hue % 1
 end
 
-do
-	function tween:Tween(obj, tweeninfo, goal, tab)
-		tab = tab or self.tweens
-		if tab[obj] then
-			tab[obj]:Cancel()
-			tab[obj] = nil
-		end
-
-		if obj.Parent and obj.Visible then
-			tab[obj] = tweenService:Create(obj, tweeninfo, goal)
-			tab[obj].Completed:Once(function()
-				if tab then
-					tab[obj] = nil
-					tab = nil
-				end
-			end)
-			tab[obj]:Play()
-		else
-			for i, v in goal do
-				obj[i] = v
-			end
-		end
+function mainapi:TextColor(h, s, v)
+	local c = Color3.fromHSV(h, s, v)
+	local lum = 0.299 * c.R + 0.587 * c.G + 0.114 * c.B
+	if lum > 0.55 then
+		return Color3.new(0.11, 0.11, 0.11)
 	end
-
-	function tween:Cancel(obj)
-		if self.tweens[obj] then
-			self.tweens[obj]:Cancel()
-			self.tweens[obj] = nil
-		end
-	end
+	return Color3.new(1, 1, 1)
 end
 
 mainapi.Libraries = {
@@ -527,283 +434,755 @@ mainapi.Libraries = {
 	getcustomasset = getcustomasset,
 	getfontsize = getfontsize,
 	tween = tween,
-	uipallet = uipallet,
+	uipallet = uipallet
 }
 
-local components
-components = {
-	Button = function(optionsettings, children, api)
-		local button = Instance.new('TextButton')
-		button.Name = optionsettings.Name..'Button'
-		button.Size = UDim2.new(1, 0, 0, 31)
-		button.BackgroundColor3 = color.Dark(children.BackgroundColor3, optionsettings.Darker and 0.02 or 0)
-		button.BorderSizePixel = 0
-		button.AutoButtonColor = false
-		button.Visible = optionsettings.Visible == nil or optionsettings.Visible
-		button.Text = ''
-		button.Parent = children
-		addTooltip(button, optionsettings.Tooltip)
-		local bkg = Instance.new('Frame')
-		bkg.Size = UDim2.fromOffset(200, 27)
-		bkg.Position = UDim2.fromOffset(10, 2)
-		bkg.BackgroundColor3 = color.Light(uipallet.Main, 0.05)
-		bkg.Parent = button
-		addCorner(bkg)
-		local label = Instance.new('TextLabel')
-		label.Size = UDim2.new(1, -4, 1, -4)
-		label.Position = UDim2.fromOffset(2, 2)
-		label.BackgroundColor3 = uipallet.Main
-		label.Text = optionsettings.Name
-		label.TextColor3 = color.Dark(uipallet.Text, 0.16)
-		label.TextSize = 14
-		label.FontFace = uipallet.Font
-		label.Parent = bkg
-		addCorner(label, UDim.new(0, 4))
-		optionsettings.Function = optionsettings.Function or function() end
-		
-		button.MouseEnter:Connect(function()
-			tween:Tween(bkg, uipallet.Tween, {
-				BackgroundColor3 = color.Light(uipallet.Main, 0.0875)
-			})
+local function accentColor(h, s, v, rainbow, ind)
+	if rainbow then
+		return Color3.fromHSV(mainapi:Color((h - ((ind or 0) * 0.025)) % 1), s, v)
+	end
+	return Color3.fromHSV(h, s, v)
+end
+
+local components = {
+	Toggle = function(children, settings, api)
+		local optionapi = {
+			Type = 'Toggle',
+			Enabled = false,
+			Index = getTableSize(api.Options)
+		}
+		local width = settings.Width or 478
+		local height = settings.Height or 40
+		local row = Instance.new('TextButton')
+		row.Name = settings.Name
+		row.Size = UDim2.fromOffset(width, height)
+		row.BackgroundColor3 = settings.Darker and color.Dark(uipallet.Main, 0.02) or uipallet.Main
+		row.BorderSizePixel = 0
+		row.AutoButtonColor = false
+		row.Text = ''
+		row.Parent = children
+		addCorner(row, UDim.new(0, 4))
+		local icon
+		local iconoffset = 0
+		if settings.Icon then
+			icon = Instance.new('ImageLabel')
+			icon.Name = 'Icon'
+			icon.Size = settings.Size or UDim2.fromOffset(14, 14)
+			icon.Position = UDim2.fromOffset(12, (height - (settings.Size or UDim2.fromOffset(14, 14)).Y.Offset) / 2)
+			icon.BackgroundTransparency = 1
+			icon.Image = settings.Icon
+			icon.ImageColor3 = color.Dark(uipallet.Text, 0.16)
+			icon.Parent = row
+			iconoffset = (settings.Size or UDim2.fromOffset(14, 14)).X.Offset + 14
+		end
+		local name = Instance.new('TextLabel')
+		name.Size = UDim2.fromOffset(width - iconoffset - 80, height)
+		name.Position = UDim2.fromOffset(iconoffset + 10, 0)
+		name.BackgroundTransparency = 1
+		name.Text = settings.Name
+		name.TextXAlignment = Enum.TextXAlignment.Left
+		name.TextColor3 = color.Dark(uipallet.Text, 0.16)
+		name.TextSize = 14
+		name.FontFace = uipallet.Font
+		name.Parent = row
+		local knob = Instance.new('Frame')
+		knob.Name = 'Knob'
+		knob.Size = UDim2.fromOffset(40, 20)
+		knob.Position = UDim2.new(1, -10, 0.5, 0)
+		knob.AnchorPoint = Vector2.new(1, 0.5)
+		knob.BackgroundColor3 = color.Light(uipallet.Main, 0.14)
+		knob.BorderSizePixel = 0
+		knob.Parent = row
+		addCorner(knob, UDim.new(1, 0))
+		local knobinner = Instance.new('Frame')
+		knobinner.Name = 'KnobInner'
+		knobinner.Size = UDim2.fromOffset(32, 16)
+		knobinner.Position = UDim2.fromOffset(3, 2)
+		knobinner.BackgroundColor3 = color.Light(uipallet.Main, 0.5)
+		knobinner.BorderSizePixel = 0
+		knobinner.Parent = knob
+		addCorner(knobinner, UDim.new(1, 0))
+		settings.Function = settings.Function or function() end
+		optionapi.Object = row
+		optionapi.Knob = knob
+
+		local function restyle()
+			if optionapi.Enabled then
+				local accent = Color3.fromHSV(mainapi.GUIColor.Hue, mainapi.GUIColor.Sat, mainapi.GUIColor.Value)
+				knob.BackgroundColor3 = accent
+				knobinner.BackgroundColor3 = color.Light(accent, 0.65)
+				tween:Tween(knobinner, uipallet.Tween, {
+					Position = UDim2.fromOffset(5, 2)
+				})
+			else
+				knob.BackgroundColor3 = color.Light(uipallet.Main, 0.14)
+				knobinner.BackgroundColor3 = color.Light(uipallet.Main, 0.5)
+				tween:Tween(knobinner, uipallet.Tween, {
+					Position = UDim2.fromOffset(3, 2)
+				})
+			end
+		end
+
+		function optionapi:Toggle()
+			self.Enabled = not self.Enabled
+			restyle()
+			settings.Function(self.Enabled)
+		end
+
+		function optionapi:Color(h, s, v, rainbow)
+			if self.Enabled then
+				local accent = accentColor(h, s, v, rainbow, self.Index)
+				knob.BackgroundColor3 = accent
+				knobinner.BackgroundColor3 = color.Light(accent, 0.65)
+			end
+		end
+
+		row.MouseButton1Click:Connect(function()
+			optionapi:Toggle()
 		end)
-		button.MouseLeave:Connect(function()
-			tween:Tween(bkg, uipallet.Tween, {
-				BackgroundColor3 = color.Light(uipallet.Main, 0.05)
-			})
+		row.MouseEnter:Connect(function()
+			if not optionapi.Enabled then
+				row.BackgroundColor3 = color.Light(uipallet.Main, 0.02)
+			end
 		end)
-		button.MouseButton1Click:Connect(optionsettings.Function)
+		row.MouseLeave:Connect(function()
+			if not optionapi.Enabled then
+				row.BackgroundColor3 = settings.Darker and color.Dark(uipallet.Main, 0.02) or uipallet.Main
+			end
+		end)
+
+		function optionapi:Save(tab)
+			tab[settings.Name] = {
+				Enabled = self.Enabled
+			}
+		end
+
+		function optionapi:Load(tab)
+			if self.Enabled ~= tab.Enabled then
+				self:Toggle()
+			end
+		end
+
+		if settings.Default then
+			optionapi:Toggle()
+		end
+		if settings.Visible == false then
+			row.Visible = false
+		end
+		api.Options[settings.Name] = optionapi
+		addTooltip(row, settings.Tooltip)
+
+		return optionapi
 	end,
-	ColorSlider = function(optionsettings, children, api)
+	Slider = function(children, settings, api)
+		local optionapi = {
+			Type = 'Slider',
+			Value = settings.Default or settings.Min or 0,
+			Min = settings.Min or 0,
+			Max = settings.Max or 100,
+			Decimal = settings.Decimal or 0,
+			Suffix = settings.Suffix or '',
+			Index = getTableSize(api.Options)
+		}
+		local row = Instance.new('TextButton')
+		row.Name = settings.Name
+		row.Size = UDim2.fromOffset(478, 40)
+		row.BackgroundColor3 = settings.Darker and color.Dark(uipallet.Main, 0.02) or uipallet.Main
+		row.BorderSizePixel = 0
+		row.AutoButtonColor = false
+		row.Text = ''
+		row.Parent = children
+		addCorner(row, UDim.new(0, 4))
+		local name = Instance.new('TextLabel')
+		name.Size = UDim2.fromOffset(250, 40)
+		name.Position = UDim2.fromOffset(10, 0)
+		name.BackgroundTransparency = 1
+		name.Text = settings.Name
+		name.TextXAlignment = Enum.TextXAlignment.Left
+		name.TextColor3 = color.Dark(uipallet.Text, 0.16)
+		name.TextSize = 14
+		name.FontFace = uipallet.Font
+		name.Parent = row
+		local value = Instance.new('TextLabel')
+		value.Size = UDim2.fromOffset(120, 40)
+		value.Position = UDim2.new(1, -10, 0, 0)
+		value.AnchorPoint = Vector2.new(1, 0)
+		value.BackgroundTransparency = 1
+		value.Text = ''
+		value.TextXAlignment = Enum.TextXAlignment.Right
+		value.TextColor3 = color.Dark(uipallet.Text, 0.43)
+		value.TextSize = 12
+		value.FontFace = uipallet.Font
+		value.Parent = row
+		local holder = Instance.new('Frame')
+		holder.Name = 'Slider'
+		holder.Size = UDim2.fromOffset(140, 2)
+		holder.Position = UDim2.new(1, -160, 0.5, 0)
+		holder.BackgroundColor3 = color.Light(uipallet.Main, 0.14)
+		holder.BorderSizePixel = 0
+		holder.Parent = row
+		local fill = Instance.new('Frame')
+		fill.Name = 'Fill'
+		fill.Size = UDim2.fromScale(0, 1)
+		fill.BackgroundColor3 = color.Light(uipallet.Main, 0.4)
+		fill.BorderSizePixel = 0
+		fill.Parent = holder
+		local knob = Instance.new('Frame')
+		knob.Name = 'Knob'
+		knob.Size = UDim2.fromOffset(12, 12)
+		knob.Position = UDim2.fromScale(0, 0.5)
+		knob.AnchorPoint = Vector2.new(0.5, 0.5)
+		knob.BackgroundColor3 = color.Light(uipallet.Main, 0.6)
+		knob.BorderSizePixel = 0
+		knob.Parent = holder
+		addCorner(knob, UDim.new(1, 0))
+		settings.Function = settings.Function or function() end
+		optionapi.Object = row
+
+		local function render(val)
+			local pos = (val - optionapi.Min) / (optionapi.Max - optionapi.Min)
+			fill.Size = UDim2.fromScale(pos, 1)
+			knob.Position = UDim2.fromScale(pos, 0.5)
+			local suffix = settings.Suffix or ''
+			value.Text = settings.Decimal > 0 and string.format('%.'..settings.Decimal..'f', val)..suffix or tostring(math.round(val))..suffix
+		end
+
+		function optionapi:SetValue(val, pos, final)
+			self.Value = math.clamp(val, self.Min, self.Max)
+			render(self.Value)
+			settings.Function(self.Value, final)
+		end
+
+		row.InputBegan:Connect(function(inputObj)
+			if
+				(inputObj.UserInputType == Enum.UserInputType.MouseButton1 or inputObj.UserInputType == Enum.UserInputType.Touch)
+				and (inputObj.Position.Y - row.AbsolutePosition.Y) > (16 * scale.Scale)
+			then
+				local function update(input)
+					local val = math.clamp((input.Position.X - holder.AbsolutePosition.X) / holder.AbsoluteSize.X, 0, 1)
+					optionapi:SetValue(optionapi.Min + (optionapi.Max - optionapi.Min) * val, true, false)
+				end
+				update(inputObj)
+				local changed = inputService.InputChanged:Connect(function(input)
+					if input.UserInputType == (inputObj.UserInputType == Enum.UserInputType.MouseButton1 and Enum.UserInputType.MouseMovement or Enum.UserInputType.Touch) then
+						update(input)
+					end
+				end)
+				local ended
+				ended = inputObj.Changed:Connect(function()
+					if inputObj.UserInputState == Enum.UserInputState.End then
+						optionapi:SetValue(optionapi.Value, false, true)
+						if changed then changed:Disconnect() end
+						if ended then ended:Disconnect() end
+					end
+				end)
+			end
+		end)
+		row.MouseEnter:Connect(function()
+			tween:Tween(knob, uipallet.Tween, {
+				Size = UDim2.fromOffset(14, 14)
+			})
+		end)
+		row.MouseLeave:Connect(function()
+			tween:Tween(knob, uipallet.Tween, {
+				Size = UDim2.fromOffset(12, 12)
+			})
+		end)
+
+		function optionapi:Save(tab)
+			tab[settings.Name] = {
+				Value = self.Value,
+				Max = self.Max
+			}
+		end
+
+		function optionapi:Load(tab)
+			if tab.Max then
+				self.Max = tab.Max
+			end
+			self:SetValue(tab.Value or self.Min)
+		end
+
+		if settings.Visible == false then
+			row.Visible = false
+		end
+		render(optionapi.Value)
+		api.Options[settings.Name] = optionapi
+		addTooltip(row, settings.Tooltip)
+
+		return optionapi
+	end,
+	TwoSlider = function(children, settings, api)
+		local optionapi = {
+			Type = 'TwoSlider',
+			ValueMin = settings.Min or 0,
+			ValueMax = settings.Max or 100,
+			Min = settings.Min or 0,
+			Max = settings.Max or 100,
+			Decimal = settings.Decimal or 0,
+			Index = getTableSize(api.Options)
+		}
+		local row = Instance.new('TextButton')
+		row.Name = settings.Name
+		row.Size = UDim2.fromOffset(478, 40)
+		row.BackgroundColor3 = settings.Darker and color.Dark(uipallet.Main, 0.02) or uipallet.Main
+		row.BorderSizePixel = 0
+		row.AutoButtonColor = false
+		row.Text = ''
+		row.Parent = children
+		addCorner(row, UDim.new(0, 4))
+		local name = Instance.new('TextLabel')
+		name.Size = UDim2.fromOffset(250, 40)
+		name.Position = UDim2.fromOffset(10, 0)
+		name.BackgroundTransparency = 1
+		name.Text = settings.Name
+		name.TextXAlignment = Enum.TextXAlignment.Left
+		name.TextColor3 = color.Dark(uipallet.Text, 0.16)
+		name.TextSize = 14
+		name.FontFace = uipallet.Font
+		name.Parent = row
+		local value = Instance.new('TextLabel')
+		value.Size = UDim2.fromOffset(150, 40)
+		value.Position = UDim2.new(1, -10, 0, 0)
+		value.AnchorPoint = Vector2.new(1, 0)
+		value.BackgroundTransparency = 1
+		value.Text = ''
+		value.TextXAlignment = Enum.TextXAlignment.Right
+		value.TextColor3 = color.Dark(uipallet.Text, 0.43)
+		value.TextSize = 12
+		value.FontFace = uipallet.Font
+		value.Parent = row
+		local holder = Instance.new('Frame')
+		holder.Name = 'Slider'
+		holder.Size = UDim2.fromOffset(180, 2)
+		holder.Position = UDim2.new(1, -200, 0.5, 0)
+		holder.BackgroundColor3 = color.Light(uipallet.Main, 0.14)
+		holder.BorderSizePixel = 0
+		holder.Parent = row
+		local fill = Instance.new('Frame')
+		fill.Name = 'Fill'
+		fill.BackgroundColor3 = color.Light(uipallet.Main, 0.4)
+		fill.BorderSizePixel = 0
+		fill.Parent = holder
+		local knobmin = Instance.new('Frame')
+		knobmin.Name = 'KnobMin'
+		knobmin.Size = UDim2.fromOffset(12, 12)
+		knobmin.Position = UDim2.fromScale(0, 0.5)
+		knobmin.AnchorPoint = Vector2.new(0.5, 0.5)
+		knobmin.BackgroundColor3 = color.Light(uipallet.Main, 0.6)
+		knobmin.BorderSizePixel = 0
+		knobmin.Parent = holder
+		addCorner(knobmin, UDim.new(1, 0))
+		local knobmax = knobmin:Clone()
+		knobmax.Name = 'KnobMax'
+		knobmax.Parent = holder
+		settings.Function = settings.Function or function() end
+		optionapi.Object = row
+
+		local function render()
+			local posmin = (optionapi.ValueMin - optionapi.Min) / (optionapi.Max - optionapi.Min)
+			local posmax = (optionapi.ValueMax - optionapi.Min) / (optionapi.Max - optionapi.Min)
+			fill.Position = UDim2.fromScale(posmin, 0)
+			fill.Size = UDim2.fromScale(posmax - posmin, 1)
+			knobmin.Position = UDim2.fromScale(posmin, 0.5)
+			knobmax.Position = UDim2.fromScale(posmax, 0.5)
+			value.Text = tostring(optionapi.ValueMin)..' - '..tostring(optionapi.ValueMax)
+		end
+
+		function optionapi:SetValue(max, min)
+			self.ValueMax = math.clamp(max, self.Min, self.Max)
+			self.ValueMin = math.clamp(min, self.Min, self.Max)
+			render()
+			settings.Function(self.ValueMin, self.ValueMax)
+		end
+
+		row.InputBegan:Connect(function(inputObj)
+			if
+				(inputObj.UserInputType == Enum.UserInputType.MouseButton1 or inputObj.UserInputType == Enum.UserInputType.Touch)
+				and (inputObj.Position.Y - row.AbsolutePosition.Y) > (16 * scale.Scale)
+			then
+				local function update(input)
+					local val = math.clamp((input.Position.X - holder.AbsolutePosition.X) / holder.AbsoluteSize.X, 0, 1) * (optionapi.Max - optionapi.Min) + optionapi.Min
+					if math.abs(val - optionapi.ValueMin) < math.abs(val - optionapi.ValueMax) then
+						optionapi:SetValue(optionapi.ValueMax, val)
+					else
+						optionapi:SetValue(val, optionapi.ValueMin)
+					end
+				end
+				update(inputObj)
+				local changed = inputService.InputChanged:Connect(function(input)
+					if input.UserInputType == (inputObj.UserInputType == Enum.UserInputType.MouseButton1 and Enum.UserInputType.MouseMovement or Enum.UserInputType.Touch) then
+						update(input)
+					end
+				end)
+				local ended
+				ended = inputObj.Changed:Connect(function()
+					if inputObj.UserInputState == Enum.UserInputState.End then
+						if changed then changed:Disconnect() end
+						if ended then ended:Disconnect() end
+					end
+				end)
+			end
+		end)
+
+		function optionapi:Save(tab)
+			tab[settings.Name] = {
+				ValueMin = self.ValueMin,
+				ValueMax = self.ValueMax
+			}
+		end
+
+		function optionapi:Load(tab)
+			self:SetValue(tab.ValueMax or self.Max, tab.ValueMin or self.Min)
+		end
+
+		if settings.Visible == false then
+			row.Visible = false
+		end
+		render()
+		api.Options[settings.Name] = optionapi
+		addTooltip(row, settings.Tooltip)
+
+		return optionapi
+	end,
+	Dropdown = function(children, settings, api)
+		local optionapi = {
+			Type = 'Dropdown',
+			Value = settings.Default or settings.List[1] or '',
+			Index = getTableSize(api.Options)
+		}
+		local row = Instance.new('TextButton')
+		row.Name = settings.Name
+		row.Size = UDim2.fromOffset(478, 40)
+		row.BackgroundColor3 = settings.Darker and color.Dark(uipallet.Main, 0.02) or uipallet.Main
+		row.BorderSizePixel = 0
+		row.AutoButtonColor = false
+		row.Text = ''
+		row.Parent = children
+		addCorner(row, UDim.new(0, 4))
+		local name = Instance.new('TextLabel')
+		name.Size = UDim2.fromOffset(250, 40)
+		name.Position = UDim2.fromOffset(10, 0)
+		name.BackgroundTransparency = 1
+		name.Text = settings.Name
+		name.TextXAlignment = Enum.TextXAlignment.Left
+		name.TextColor3 = color.Dark(uipallet.Text, 0.16)
+		name.TextSize = 14
+		name.FontFace = uipallet.Font
+		name.Parent = row
+		local value = Instance.new('TextLabel')
+		value.Size = UDim2.fromOffset(170, 40)
+		value.Position = UDim2.new(1, -34, 0, 0)
+		value.AnchorPoint = Vector2.new(1, 0)
+		value.BackgroundTransparency = 1
+		value.Text = optionapi.Value
+		value.TextXAlignment = Enum.TextXAlignment.Right
+		value.TextColor3 = color.Dark(uipallet.Text, 0.43)
+		value.TextSize = 12
+		value.FontFace = uipallet.Font
+		value.Parent = row
+		local arrow = Instance.new('TextLabel')
+		arrow.Size = UDim2.fromOffset(14, 40)
+		arrow.Position = UDim2.new(1, -20, 0, 0)
+		arrow.BackgroundTransparency = 1
+		arrow.Text = '▼'
+		arrow.TextColor3 = color.Light(uipallet.Main, 0.37)
+		arrow.TextSize = 9
+		arrow.FontFace = uipallet.Font
+		arrow.Parent = row
+		local window = children.Parent
+		local dropdown = Instance.new('Frame')
+		dropdown.Name = 'Dropdown'
+		dropdown.Size = UDim2.fromOffset(478, 0)
+		dropdown.BackgroundColor3 = color.Dark(uipallet.Main, 0.03)
+		dropdown.BorderSizePixel = 0
+		dropdown.Visible = false
+		dropdown.ZIndex = 8
+		dropdown.Parent = window
+		addCorner(dropdown, UDim.new(0, 4))
+		local list = Instance.new('ScrollingFrame')
+		list.Size = UDim2.fromScale(1, 1)
+		list.BackgroundTransparency = 1
+		list.BorderSizePixel = 0
+		list.ScrollBarThickness = 2
+		list.ScrollBarImageTransparency = 0.75
+		list.AutomaticCanvasSize = Enum.AutomaticSize.Y
+		list.CanvasSize = UDim2.fromOffset(0, 0)
+		list.Parent = dropdown
+		local listlayout = Instance.new('UIListLayout')
+		listlayout.SortOrder = Enum.SortOrder.LayoutOrder
+		listlayout.Padding = UDim.new(0, 2)
+		listlayout.Parent = list
+		settings.Function = settings.Function or function() end
+		optionapi.Object = row
+
+		local function openDropdown()
+			local pos = row.AbsolutePosition - window.AbsolutePosition
+			dropdown.Position = UDim2.fromOffset(pos.X, pos.Y + 40)
+			dropdown.Size = UDim2.fromOffset(478, math.min(#settings.List * 34 + 4, 240))
+			dropdown.Visible = true
+		end
+
+		for i, v in settings.List do
+			local item = Instance.new('TextButton')
+			item.Name = v
+			item.Size = UDim2.fromOffset(478, 32)
+			item.BackgroundColor3 = Color3.new(1, 1, 1)
+			item.BackgroundTransparency = 1
+			item.AutoButtonColor = false
+			item.Text = ''
+			item.LayoutOrder = i
+			item.Parent = list
+			local itemname = Instance.new('TextLabel')
+			itemname.Size = UDim2.fromOffset(440, 32)
+			itemname.Position = UDim2.fromOffset(10, 0)
+			itemname.BackgroundTransparency = 1
+			itemname.Text = v
+			itemname.TextXAlignment = Enum.TextXAlignment.Left
+			itemname.TextColor3 = color.Dark(uipallet.Text, 0.16)
+			itemname.TextSize = 13
+			itemname.FontFace = uipallet.Font
+			itemname.Parent = item
+			local check = Instance.new('TextLabel')
+			check.Size = UDim2.fromOffset(16, 32)
+			check.Position = UDim2.new(1, -24, 0, 0)
+			check.BackgroundTransparency = 1
+			check.Text = optionapi.Value == v and '✓' or ''
+			check.TextColor3 = color.Dark(uipallet.Text, 0.43)
+			check.TextSize = 13
+			check.FontFace = uipallet.FontSemiBold
+			check.Parent = item
+			item.MouseEnter:Connect(function()
+				item.BackgroundColor3 = color.Light(uipallet.Main, 0.02)
+			end)
+			item.MouseLeave:Connect(function()
+				item.BackgroundColor3 = Color3.new(1, 1, 1)
+				item.BackgroundTransparency = 1
+			end)
+			item.MouseButton1Click:Connect(function()
+				optionapi:SetValue(v, true)
+				dropdown.Visible = false
+			end)
+		end
+
+		function optionapi:SetValue(val, mouse)
+			self.Value = val
+			value.Text = val
+			for _, item in list:GetChildren() do
+				if item:IsA('TextButton') then
+					local check = item:FindFirstChildOfClass('TextLabel')
+					if check then
+						check.Text = item.Name == val and '✓' or ''
+					end
+				end
+			end
+			settings.Function(val, mouse)
+		end
+
+		row.MouseButton1Click:Connect(function()
+			if dropdown.Visible then
+				dropdown.Visible = false
+			else
+				openDropdown()
+			end
+		end)
+
+		function optionapi:Save(tab)
+			tab[settings.Name] = {
+				Value = self.Value
+			}
+		end
+
+		function optionapi:Load(tab)
+			if tab.Value then
+				self:SetValue(tab.Value)
+			end
+		end
+
+		if settings.Visible == false then
+			row.Visible = false
+		end
+		api.Options[settings.Name] = optionapi
+		addTooltip(row, settings.Tooltip)
+
+		return optionapi
+	end,
+	ColorSlider = function(children, settings, api)
 		local optionapi = {
 			Type = 'ColorSlider',
-			Hue = optionsettings.DefaultHue or 0.44,
-			Sat = optionsettings.DefaultSat or 1,
-			Value = optionsettings.DefaultValue or 1,
-			Opacity = optionsettings.DefaultOpacity or 1,
+			Hue = settings.DefaultHue or 0,
+			Sat = settings.DefaultSat or 1,
+			Value = settings.DefaultValue or 1,
+			Opacity = 1,
 			Rainbow = false,
-			Index = 0
+			Index = getTableSize(api.Options)
 		}
-		
-		local function createSlider(name, gradientColor)
-			local slider = Instance.new('TextButton')
-			slider.Name = optionsettings.Name..'Slider'..name
-			slider.Size = UDim2.new(1, 0, 0, 50)
-			slider.BackgroundColor3 = color.Dark(children.BackgroundColor3, optionsettings.Darker and 0.02 or 0)
-			slider.BorderSizePixel = 0
-			slider.AutoButtonColor = false
-			slider.Visible = false
-			slider.Text = ''
-			slider.Parent = children
-			local title = Instance.new('TextLabel')
-			title.Name = 'Title'
-			title.Size = UDim2.fromOffset(60, 30)
-			title.Position = UDim2.fromOffset(10, 2)
-			title.BackgroundTransparency = 1
-			title.Text = name
-			title.TextXAlignment = Enum.TextXAlignment.Left
-			title.TextColor3 = color.Dark(uipallet.Text, 0.16)
-			title.TextSize = 11
-			title.FontFace = uipallet.Font
-			title.Parent = slider
-			local bkg = Instance.new('Frame')
-			bkg.Name = 'Slider'
-			bkg.Size = UDim2.new(1, -20, 0, 2)
-			bkg.Position = UDim2.fromOffset(10, 37)
-			bkg.BackgroundColor3 = Color3.new(1, 1, 1)
-			bkg.BorderSizePixel = 0
-			bkg.Parent = slider
-			local gradient = Instance.new('UIGradient')
-			gradient.Color = gradientColor
-			gradient.Parent = bkg
-			local fill = bkg:Clone()
-			fill.Name = 'Fill'
-			fill.Size = UDim2.fromScale(math.clamp(name == 'Saturation' and optionapi.Sat or name == 'Vibrance' and optionapi.Value or optionapi.Opacity, 0.04, 0.96), 1)
-			fill.Position = UDim2.new()
-			fill.BackgroundTransparency = 1
-			fill.Parent = bkg
-			local knobholder = Instance.new('Frame')
-			knobholder.Name = 'Knob'
-			knobholder.Size = UDim2.fromOffset(24, 4)
-			knobholder.Position = UDim2.fromScale(1, 0.5)
-			knobholder.AnchorPoint = Vector2.new(0.5, 0.5)
-			knobholder.BackgroundColor3 = slider.BackgroundColor3
-			knobholder.BorderSizePixel = 0
-			knobholder.Parent = fill
-			local knob = Instance.new('Frame')
-			knob.Name = 'Knob'
-			knob.Size = UDim2.fromOffset(14, 14)
-			knob.Position = UDim2.fromScale(0.5, 0.5)
-			knob.AnchorPoint = Vector2.new(0.5, 0.5)
-			knob.BackgroundColor3 = uipallet.Text
-			knob.Parent = knobholder
-			addCorner(knob, UDim.new(1, 0))
-		
-			slider.InputBegan:Connect(function(inputObj)
-				if
-					(inputObj.UserInputType == Enum.UserInputType.MouseButton1 or inputObj.UserInputType == Enum.UserInputType.Touch)
-					and (inputObj.Position.Y - slider.AbsolutePosition.Y) > (20 * scale.Scale)
-				then
-					local changed = inputService.InputChanged:Connect(function(input)
-						if input.UserInputType == (inputObj.UserInputType == Enum.UserInputType.MouseButton1 and Enum.UserInputType.MouseMovement or Enum.UserInputType.Touch) then
-							optionapi:SetValue(nil, name == 'Saturation' and math.clamp((input.Position.X - bkg.AbsolutePosition.X) / bkg.AbsoluteSize.X, 0, 1) or nil, name == 'Vibrance' and math.clamp((input.Position.X - bkg.AbsolutePosition.X) / bkg.AbsoluteSize.X, 0, 1) or nil, name == 'Opacity' and math.clamp((input.Position.X - bkg.AbsolutePosition.X) / bkg.AbsoluteSize.X, 0, 1) or nil)
-						end
-					end)
-		
-					local ended
-					ended = inputObj.Changed:Connect(function()
-						if inputObj.UserInputState == Enum.UserInputState.End then
-							if changed then changed:Disconnect() end
-							if ended then ended:Disconnect() end
-						end
-					end)
-				end
-			end)
-			slider.MouseEnter:Connect(function()
-				tween:Tween(knob, uipallet.Tween, {
-					Size = UDim2.fromOffset(16, 16)
-				})
-			end)
-			slider.MouseLeave:Connect(function()
-				tween:Tween(knob, uipallet.Tween, {
-					Size = UDim2.fromOffset(14, 14)
-				})
-			end)
-		
-			return slider
-		end
-		
-		local slider = Instance.new('TextButton')
-		slider.Name = optionsettings.Name..'Slider'
-		slider.Size = UDim2.new(1, 0, 0, 50)
-		slider.BackgroundColor3 = color.Dark(children.BackgroundColor3, optionsettings.Darker and 0.02 or 0)
+		local row = Instance.new('TextButton')
+		row.Name = settings.Name
+		row.Size = UDim2.fromOffset(478, 40)
+		row.BackgroundColor3 = settings.Darker and color.Dark(uipallet.Main, 0.02) or uipallet.Main
+		row.BorderSizePixel = 0
+		row.AutoButtonColor = false
+		row.Text = ''
+		row.Parent = children
+		addCorner(row, UDim.new(0, 4))
+		local name = Instance.new('TextLabel')
+		name.Size = UDim2.fromOffset(250, 40)
+		name.Position = UDim2.fromOffset(10, 0)
+		name.BackgroundTransparency = 1
+		name.Text = settings.Name
+		name.TextXAlignment = Enum.TextXAlignment.Left
+		name.TextColor3 = color.Dark(uipallet.Text, 0.16)
+		name.TextSize = 14
+		name.FontFace = uipallet.Font
+		name.Parent = row
+		local preview = Instance.new('ImageLabel')
+		preview.Name = 'Preview'
+		preview.Size = UDim2.fromOffset(12, 12)
+		preview.Position = UDim2.new(1, -30, 0.5, 0)
+		preview.AnchorPoint = Vector2.new(1, 0.5)
+		preview.BackgroundTransparency = 1
+		preview.Image = getcustomasset('skidv5/assets/new/colorpreview.png')
+		preview.ImageColor3 = Color3.fromHSV(optionapi.Hue, optionapi.Sat, optionapi.Value)
+		preview.Parent = row
+		local arrow = Instance.new('TextLabel')
+		arrow.Size = UDim2.fromOffset(14, 40)
+		arrow.Position = UDim2.new(1, -16, 0, 0)
+		arrow.BackgroundTransparency = 1
+		arrow.Text = '▼'
+		arrow.TextColor3 = color.Light(uipallet.Main, 0.37)
+		arrow.TextSize = 9
+		arrow.FontFace = uipallet.Font
+		arrow.Parent = row
+		local slider = Instance.new('Frame')
+		slider.Name = 'Slider'
+		slider.Size = UDim2.fromOffset(478, 50)
+		slider.BackgroundColor3 = color.Dark(uipallet.Main, 0.02)
 		slider.BorderSizePixel = 0
-		slider.AutoButtonColor = false
-		slider.Visible = optionsettings.Visible == nil or optionsettings.Visible
-		slider.Text = ''
+		slider.Visible = false
 		slider.Parent = children
-		addTooltip(slider, optionsettings.Tooltip)
-		local title = Instance.new('TextLabel')
-		title.Name = 'Title'
-		title.Size = UDim2.fromOffset(60, 30)
-		title.Position = UDim2.fromOffset(10, 2)
-		title.BackgroundTransparency = 1
-		title.Text = optionsettings.Name
-		title.TextXAlignment = Enum.TextXAlignment.Left
-		title.TextColor3 = color.Dark(uipallet.Text, 0.16)
-		title.TextSize = 11
-		title.FontFace = uipallet.Font
-		title.Parent = slider
-		local valuebox = Instance.new('TextBox')
-		valuebox.Name = 'Box'
-		valuebox.Size = UDim2.fromOffset(60, 15)
-		valuebox.Position = UDim2.new(1, -69, 0, 9)
-		valuebox.BackgroundTransparency = 1
-		valuebox.Visible = false
-		valuebox.Text = ''
-		valuebox.TextXAlignment = Enum.TextXAlignment.Right
-		valuebox.TextColor3 = color.Dark(uipallet.Text, 0.16)
-		valuebox.TextSize = 11
-		valuebox.FontFace = uipallet.Font
-		valuebox.ClearTextOnFocus = true
-		valuebox.Parent = slider
-		local bkg = Instance.new('Frame')
-		bkg.Name = 'Slider'
-		bkg.Size = UDim2.new(1, -20, 0, 2)
-		bkg.Position = UDim2.fromOffset(10, 39)
-		bkg.BackgroundColor3 = Color3.new(1, 1, 1)
-		bkg.BorderSizePixel = 0
-		bkg.Parent = slider
-		local rainbowTable = {}
+		addCorner(slider, UDim.new(0, 4))
+		local holder = Instance.new('Frame')
+		holder.Name = 'Holder'
+		holder.Size = UDim2.fromOffset(400, 2)
+		holder.Position = UDim2.fromOffset(10, 24)
+		holder.BackgroundColor3 = Color3.new(1, 1, 1)
+		holder.BorderSizePixel = 0
+		holder.Parent = slider
+		local rainbowtable = {}
 		for i = 0, 1, 0.1 do
-			table.insert(rainbowTable, ColorSequenceKeypoint.new(i, Color3.fromHSV(i, 1, 1)))
+			table.insert(rainbowtable, ColorSequenceKeypoint.new(i, Color3.fromHSV(i, 1, 1)))
 		end
-		local gradient = Instance.new('UIGradient')
-		gradient.Color = ColorSequence.new(rainbowTable)
-		gradient.Parent = bkg
-		local fill = bkg:Clone()
+		local uigradient = Instance.new('UIGradient')
+		uigradient.Color = ColorSequence.new(rainbowtable)
+		uigradient.Parent = holder
+		local fill = holder:Clone()
 		fill.Name = 'Fill'
 		fill.Size = UDim2.fromScale(math.clamp(optionapi.Hue, 0.04, 0.96), 1)
 		fill.Position = UDim2.new()
 		fill.BackgroundTransparency = 1
-		fill.Parent = bkg
-		local preview = Instance.new('ImageButton')
-		preview.Name = 'Preview'
-		preview.Size = UDim2.fromOffset(12, 12)
-		preview.Position = UDim2.new(1, -22, 0, 10)
-		preview.BackgroundTransparency = 1
-		preview.Image = getcustomasset('skidv5/assets/new/colorpreview.png')
-		preview.ImageColor3 = Color3.fromHSV(optionapi.Hue, optionapi.Sat, optionapi.Value)
-		preview.ImageTransparency = 1 - optionapi.Opacity
-		preview.Parent = slider
-		local expandbutton = Instance.new('TextButton')
-		expandbutton.Name = 'Expand'
-		expandbutton.Size = UDim2.fromOffset(17, 13)
-		expandbutton.Position = UDim2.new(0, textService:GetTextSize(title.Text, title.TextSize, title.Font, Vector2.new(1000, 1000)).X + 11, 0, 7)
-		expandbutton.BackgroundTransparency = 1
-		expandbutton.Text = ''
-		expandbutton.Parent = slider
-		local expand = Instance.new('ImageLabel')
-		expand.Name = 'Expand'
-		expand.Size = UDim2.fromOffset(9, 5)
-		expand.Position = UDim2.fromOffset(4, 4)
-		expand.BackgroundTransparency = 1
-		expand.Image = getcustomasset('skidv5/assets/new/expandicon.png')
-		expand.ImageColor3 = color.Dark(uipallet.Text, 0.43)
-		expand.Parent = expandbutton
-		local rainbow = Instance.new('TextButton')
-		rainbow.Name = 'Rainbow'
-		rainbow.Size = UDim2.fromOffset(12, 12)
-		rainbow.Position = UDim2.new(1, -42, 0, 10)
-		rainbow.BackgroundTransparency = 1
-		rainbow.Text = ''
-		rainbow.Parent = slider
-		local rainbow1 = Instance.new('ImageLabel')
-		rainbow1.Size = UDim2.fromOffset(12, 12)
-		rainbow1.BackgroundTransparency = 1
-		rainbow1.Image = getcustomasset('skidv5/assets/new/rainbow_1.png')
-		rainbow1.ImageColor3 = color.Light(uipallet.Main, 0.37)
-		rainbow1.Parent = rainbow
-		local rainbow2 = rainbow1:Clone()
-		rainbow2.Image = getcustomasset('skidv5/assets/new/rainbow_2.png')
-		rainbow2.Parent = rainbow
-		local rainbow3 = rainbow1:Clone()
-		rainbow3.Image = getcustomasset('skidv5/assets/new/rainbow_3.png')
-		rainbow3.Parent = rainbow
-		local rainbow4 = rainbow1:Clone()
-		rainbow4.Image = getcustomasset('skidv5/assets/new/rainbow_4.png')
-		rainbow4.Parent = rainbow
-		local knobholder = Instance.new('Frame')
-		knobholder.Name = 'Knob'
-		knobholder.Size = UDim2.fromOffset(24, 4)
-		knobholder.Position = UDim2.fromScale(1, 0.5)
-		knobholder.AnchorPoint = Vector2.new(0.5, 0.5)
-		knobholder.BackgroundColor3 = slider.BackgroundColor3
-		knobholder.BorderSizePixel = 0
-		knobholder.Parent = fill
+		fill.Parent = holder
 		local knob = Instance.new('Frame')
 		knob.Name = 'Knob'
 		knob.Size = UDim2.fromOffset(14, 14)
-		knob.Position = UDim2.fromScale(0.5, 0.5)
+		knob.Position = UDim2.fromScale(optionapi.Hue, 0.5)
 		knob.AnchorPoint = Vector2.new(0.5, 0.5)
-		knob.BackgroundColor3 = uipallet.Text
-		knob.Parent = knobholder
+		knob.BackgroundColor3 = Color3.fromHSV(optionapi.Hue, optionapi.Sat, optionapi.Value)
+		knob.BorderSizePixel = 0
+		knob.Parent = holder
 		addCorner(knob, UDim.new(1, 0))
-		optionsettings.Function = optionsettings.Function or function() end
-		local satSlider = createSlider('Saturation', ColorSequence.new({
-			ColorSequenceKeypoint.new(0, Color3.fromHSV(0, 0, optionapi.Value)),
-			ColorSequenceKeypoint.new(1, Color3.fromHSV(optionapi.Hue, 1, optionapi.Value))
-		}))
-		local vibSlider = createSlider('Vibrance', ColorSequence.new({
-			ColorSequenceKeypoint.new(0, Color3.fromHSV(0, 0, 0)),
-			ColorSequenceKeypoint.new(1, Color3.fromHSV(optionapi.Hue, optionapi.Sat, 1))
-		}))
-		local opSlider = createSlider('Opacity', ColorSequence.new({
-			ColorSequenceKeypoint.new(0, color.Dark(uipallet.Main, 0.02)),
-			ColorSequenceKeypoint.new(1, Color3.fromHSV(optionapi.Hue, optionapi.Sat, optionapi.Value))
-		}))
-		
+		local rainbowbutton = Instance.new('TextButton')
+		rainbowbutton.Name = 'Rainbow'
+		rainbowbutton.Size = UDim2.fromOffset(28, 28)
+		rainbowbutton.Position = UDim2.new(1, -34, 0.5, 0)
+		rainbowbutton.AnchorPoint = Vector2.new(1, 0.5)
+		rainbowbutton.BackgroundTransparency = 1
+		rainbowbutton.Text = ''
+		rainbowbutton.Parent = slider
+		local rainbowicon = Instance.new('ImageLabel')
+		rainbowicon.Size = UDim2.fromOffset(12, 12)
+		rainbowicon.Position = UDim2.fromOffset(8, 8)
+		rainbowicon.BackgroundTransparency = 1
+		rainbowicon.Image = getcustomasset('skidv5/assets/new/rainbow_1.png')
+		rainbowicon.ImageColor3 = color.Light(uipallet.Main, 0.37)
+		rainbowicon.Parent = rainbowbutton
+		settings.Function = settings.Function or function() end
+		optionapi.Object = row
+
+		function optionapi:SetValue(h, s, v, o)
+			self.Hue = h or self.Hue
+			self.Sat = s or self.Sat
+			self.Value = v or self.Value
+			self.Opacity = o or self.Opacity
+			preview.ImageColor3 = Color3.fromHSV(self.Hue, self.Sat, self.Value)
+			knob.BackgroundColor3 = Color3.fromHSV(self.Hue, self.Sat, self.Value)
+			if not self.Rainbow then
+				fill.Size = UDim2.fromScale(math.clamp(self.Hue, 0.04, 0.96), 1)
+				knob.Position = UDim2.fromScale(self.Hue, 0.5)
+			end
+			settings.Function(self.Hue, self.Sat, self.Value, self.Opacity)
+		end
+
+		function optionapi:Toggle()
+			self.Rainbow = not self.Rainbow
+			local ind = table.find(mainapi.RainbowTable, self)
+			if self.Rainbow then
+				if not ind then
+					table.insert(mainapi.RainbowTable, self)
+				end
+				rainbowicon.ImageColor3 = Color3.fromHSV(0.5, 1, 1)
+				knob.BackgroundColor3 = Color3.new(1, 1, 1)
+			else
+				if ind then
+					table.remove(mainapi.RainbowTable, ind)
+				end
+				rainbowicon.ImageColor3 = color.Light(uipallet.Main, 0.37)
+				knob.BackgroundColor3 = Color3.fromHSV(self.Hue, self.Sat, self.Value)
+				self:SetValue(nil, nil, nil, nil)
+			end
+		end
+
+		function optionapi:Color(h, s, v, rainbow)
+			if rainbow and self.Rainbow then
+				preview.ImageColor3 = Color3.fromHSV(mainapi:Color((h - (self.Index * 0.025)) % 1), self.Sat, self.Value)
+			elseif not self.Rainbow then
+				preview.ImageColor3 = Color3.fromHSV(self.Hue, self.Sat, self.Value)
+			end
+		end
+
+		row.MouseButton1Click:Connect(function()
+			slider.Visible = not slider.Visible
+			arrow.Rotation = slider.Visible and 180 or 0
+		end)
+		rainbowbutton.MouseButton1Click:Connect(function()
+			optionapi:Toggle()
+		end)
+		slider.InputBegan:Connect(function(inputObj)
+			if
+				(inputObj.UserInputType == Enum.UserInputType.MouseButton1 or inputObj.UserInputType == Enum.UserInputType.Touch)
+				and (inputObj.Position.Y - slider.AbsolutePosition.Y) > (10 * scale.Scale)
+			then
+				local function update(input)
+					optionapi:SetValue(math.clamp((input.Position.X - holder.AbsolutePosition.X) / holder.AbsoluteSize.X, 0, 1))
+				end
+				update(inputObj)
+				local changed = inputService.InputChanged:Connect(function(input)
+					if input.UserInputType == (inputObj.UserInputType == Enum.UserInputType.MouseButton1 and Enum.UserInputType.MouseMovement or Enum.UserInputType.Touch) then
+						update(input)
+					end
+				end)
+				local ended
+				ended = inputObj.Changed:Connect(function()
+					if inputObj.UserInputState == Enum.UserInputState.End then
+						if changed then changed:Disconnect() end
+						if ended then ended:Disconnect() end
+					end
+				end)
+			end
+		end)
+
 		function optionapi:Save(tab)
-			tab[optionsettings.Name] = {
+			tab[settings.Name] = {
 				Hue = self.Hue,
 				Sat = self.Sat,
 				Value = self.Value,
@@ -811,1143 +1190,257 @@ components = {
 				Rainbow = self.Rainbow
 			}
 		end
-		
+
 		function optionapi:Load(tab)
-			if tab.Rainbow ~= self.Rainbow then
+			if tab.Rainbow then
 				self:Toggle()
 			end
-			if self.Hue ~= tab.Hue or self.Sat ~= tab.Sat or self.Value ~= tab.Value or self.Opacity ~= tab.Opacity then
-				self:SetValue(tab.Hue, tab.Sat, tab.Value, tab.Opacity)
-			end
-		end
-		
-		function optionapi:SetValue(h, s, v, o)
-			self.Hue = h or self.Hue
-			self.Sat = s or self.Sat
-			self.Value = v or self.Value
-			self.Opacity = o or self.Opacity
-			preview.ImageColor3 = Color3.fromHSV(self.Hue, self.Sat, self.Value)
-			preview.ImageTransparency = 1 - self.Opacity
-			satSlider.Slider.UIGradient.Color = ColorSequence.new({
-				ColorSequenceKeypoint.new(0, Color3.fromHSV(0, 0, self.Value)),
-				ColorSequenceKeypoint.new(1, Color3.fromHSV(self.Hue, 1, self.Value))
-			})
-			vibSlider.Slider.UIGradient.Color = ColorSequence.new({
-				ColorSequenceKeypoint.new(0, Color3.fromHSV(0, 0, 0)),
-				ColorSequenceKeypoint.new(1, Color3.fromHSV(self.Hue, self.Sat, 1))
-			})
-			opSlider.Slider.UIGradient.Color = ColorSequence.new({
-				ColorSequenceKeypoint.new(0, color.Dark(uipallet.Main, 0.02)),
-				ColorSequenceKeypoint.new(1, Color3.fromHSV(self.Hue, self.Sat, self.Value))
-			})
-		
-			if self.Rainbow then
-				fill.Size = UDim2.fromScale(math.clamp(self.Hue, 0.04, 0.96), 1)
-			else
-				tween:Tween(fill, uipallet.Tween, {
-					Size = UDim2.fromScale(math.clamp(self.Hue, 0.04, 0.96), 1)
-				})
-			end
-		
-			if s then
-				tween:Tween(satSlider.Slider.Fill, uipallet.Tween, {
-					Size = UDim2.fromScale(math.clamp(self.Sat, 0.04, 0.96), 1)
-				})
-			end
-			if v then
-				tween:Tween(vibSlider.Slider.Fill, uipallet.Tween, {
-					Size = UDim2.fromScale(math.clamp(self.Value, 0.04, 0.96), 1)
-				})
-			end
-			if o then
-				tween:Tween(opSlider.Slider.Fill, uipallet.Tween, {
-					Size = UDim2.fromScale(math.clamp(self.Opacity, 0.04, 0.96), 1)
-				})
-			end
-		
-			optionsettings.Function(self.Hue, self.Sat, self.Value, self.Opacity)
-		end
-		
-		function optionapi:Toggle()
-			self.Rainbow = not self.Rainbow
-			if self.Rainbow then
-				table.insert(mainapi.RainbowTable, self)
-				rainbow1.ImageColor3 = Color3.fromRGB(5, 127, 100)
-				task.delay(0.1, function()
-					if not self.Rainbow then return end
-					rainbow2.ImageColor3 = Color3.fromRGB(228, 125, 43)
-					task.delay(0.1, function()
-						if not self.Rainbow then return end
-						rainbow3.ImageColor3 = Color3.fromRGB(225, 46, 52)
-					end)
-				end)
-			else
-				local ind = table.find(mainapi.RainbowTable, self)
-				if ind then
-					table.remove(mainapi.RainbowTable, ind)
-				end
-				rainbow3.ImageColor3 = color.Light(uipallet.Main, 0.37)
-				task.delay(0.1, function()
-					if self.Rainbow then return end
-					rainbow2.ImageColor3 = color.Light(uipallet.Main, 0.37)
-					task.delay(0.1, function()
-						if self.Rainbow then return end
-						rainbow1.ImageColor3 = color.Light(uipallet.Main, 0.37)
-					end)
-				end)
-			end
-		end
-		
-		local doubleClick = tick()
-		preview.MouseButton1Click:Connect(function()
-			preview.Visible = false
-			valuebox.Visible = true
-			valuebox:CaptureFocus()
-			local text = Color3.fromHSV(optionapi.Hue, optionapi.Sat, optionapi.Value)
-			valuebox.Text = math.round(text.R * 255)..', '..math.round(text.G * 255)..', '..math.round(text.B * 255)
-		end)
-		slider.InputBegan:Connect(function(inputObj)
-			if
-				(inputObj.UserInputType == Enum.UserInputType.MouseButton1 or inputObj.UserInputType == Enum.UserInputType.Touch)
-				and (inputObj.Position.Y - slider.AbsolutePosition.Y) > (20 * scale.Scale)
-			then
-				if doubleClick > tick() then
-					optionapi:Toggle()
-				end
-				doubleClick = tick() + 0.3
-				local changed = inputService.InputChanged:Connect(function(input)
-					if input.UserInputType == (inputObj.UserInputType == Enum.UserInputType.MouseButton1 and Enum.UserInputType.MouseMovement or Enum.UserInputType.Touch) then
-						optionapi:SetValue(math.clamp((input.Position.X - bkg.AbsolutePosition.X) / bkg.AbsoluteSize.X, 0, 1))
-					end
-				end)
-		
-				local ended
-				ended = inputObj.Changed:Connect(function()
-					if inputObj.UserInputState == Enum.UserInputState.End then
-						if changed then
-							changed:Disconnect()
-						end
-						if ended then
-							ended:Disconnect()
-						end
-					end
-				end)
-			end
-		end)
-		slider.MouseEnter:Connect(function()
-			tween:Tween(knob, uipallet.Tween, {
-				Size = UDim2.fromOffset(16, 16)
-			})
-		end)
-		slider.MouseLeave:Connect(function()
-			tween:Tween(knob, uipallet.Tween, {
-				Size = UDim2.fromOffset(14, 14)
-			})
-		end)
-		slider:GetPropertyChangedSignal('Visible'):Connect(function()
-			satSlider.Visible = expand.Rotation == 180 and slider.Visible
-			vibSlider.Visible = satSlider.Visible
-			opSlider.Visible = satSlider.Visible
-		end)
-		expandbutton.MouseEnter:Connect(function()
-			expand.ImageColor3 = color.Dark(uipallet.Text, 0.16)
-		end)
-		expandbutton.MouseLeave:Connect(function()
-			expand.ImageColor3 = color.Dark(uipallet.Text, 0.43)
-		end)
-		expandbutton.MouseButton1Click:Connect(function()
-			satSlider.Visible = not satSlider.Visible
-			vibSlider.Visible = satSlider.Visible
-			opSlider.Visible = satSlider.Visible
-			expand.Rotation = satSlider.Visible and 180 or 0
-		end)
-		rainbow.MouseButton1Click:Connect(function()
-			optionapi:Toggle()
-		end)
-		valuebox.FocusLost:Connect(function(enter)
-			preview.Visible = true
-			valuebox.Visible = false
-			if enter then
-				local commas = valuebox.Text:split(',')
-				local suc, res = pcall(function()
-					return tonumber(commas[1]) and Color3.fromRGB(tonumber(commas[1]), tonumber(commas[2]), tonumber(commas[3])) or Color3.fromHex(valuebox.Text)
-				end)
-				if suc then
-					if optionapi.Rainbow then
-						optionapi:Toggle()
-					end
-					optionapi:SetValue(res:ToHSV())
-				end
-			end
-		end)
-		
-		optionapi.Object = slider
-		api.Options[optionsettings.Name] = optionapi
-		
-		return optionapi
-	end,
-	Dropdown = function(optionsettings, children, api)
-		local optionapi = {
-			Type = 'Dropdown',
-			Value = optionsettings.List[1] or 'None',
-			Index = 0
-		}
-		
-		local dropdown = Instance.new('TextButton')
-		dropdown.Name = optionsettings.Name..'Dropdown'
-		dropdown.Size = UDim2.new(1, 0, 0, 40)
-		dropdown.BackgroundColor3 = color.Dark(children.BackgroundColor3, optionsettings.Darker and 0.02 or 0)
-		dropdown.BorderSizePixel = 0
-		dropdown.AutoButtonColor = false
-		dropdown.Visible = optionsettings.Visible == nil or optionsettings.Visible
-		dropdown.Text = ''
-		dropdown.Parent = children
-		addTooltip(dropdown, optionsettings.Tooltip or optionsettings.Name)
-		local bkg = Instance.new('Frame')
-		bkg.Name = 'BKG'
-		bkg.Size = UDim2.new(1, -20, 1, -9)
-		bkg.Position = UDim2.fromOffset(10, 4)
-		bkg.BackgroundColor3 = color.Light(uipallet.Main, 0.034)
-		bkg.Parent = dropdown
-		addCorner(bkg, UDim.new(0, 6))
-		local button = Instance.new('TextButton')
-		button.Name = 'Dropdown'
-		button.Size = UDim2.new(1, -2, 1, -2)
-		button.Position = UDim2.fromOffset(1, 1)
-		button.BackgroundColor3 = uipallet.Main
-		button.AutoButtonColor = false
-		button.Text = ''
-		button.Parent = bkg
-		local title = Instance.new('TextLabel')
-		title.Name = 'Title'
-		title.Size = UDim2.new(1, 0, 0, 29)
-		title.BackgroundTransparency = 1
-		title.Text = '         '..optionsettings.Name..' - '..optionapi.Value
-		title.TextXAlignment = Enum.TextXAlignment.Left
-		title.TextColor3 = color.Dark(uipallet.Text, 0.16)
-		title.TextSize = 13
-		title.TextTruncate = Enum.TextTruncate.AtEnd
-		title.FontFace = uipallet.Font
-		title.Parent = button
-		addCorner(button, UDim.new(0, 6))
-		local arrow = Instance.new('ImageLabel')
-		arrow.Name = 'Arrow'
-		arrow.Size = UDim2.fromOffset(4, 8)
-		arrow.Position = UDim2.new(1, -17, 0, 11)
-		arrow.BackgroundTransparency = 1
-		arrow.Image = getcustomasset('skidv5/assets/new/expandright.png')
-		arrow.ImageColor3 = Color3.fromRGB(140, 140, 140)
-		arrow.Rotation = 90
-		arrow.Parent = button
-		optionsettings.Function = optionsettings.Function or function() end
-		local dropdownchildren
-		
-		function optionapi:Save(tab)
-			tab[optionsettings.Name] = {Value = self.Value}
-		end
-		
-		function optionapi:Load(tab)
-			if self.Value ~= tab.Value then
-				self:SetValue(tab.Value)
-			end
-		end
-		
-		function optionapi:Change(list)
-			optionsettings.List = list or {}
-			if not table.find(optionsettings.List, self.Value) then
-				self:SetValue(self.Value)
-			end
-		end
-		
-		function optionapi:SetValue(val, mouse)
-			self.Value = table.find(optionsettings.List, val) and val or optionsettings.List[1] or 'None'
-			title.Text = '         '..optionsettings.Name..' - '..self.Value
-			if dropdownchildren then
-				arrow.Rotation = 90
-				dropdownchildren:Destroy()
-				dropdownchildren = nil
-				dropdown.Size = UDim2.new(1, 0, 0, 40)
-			end
-			optionsettings.Function(self.Value, mouse)
-		end
-		
-		button.MouseButton1Click:Connect(function()
-			if not dropdownchildren then
-				arrow.Rotation = 270
-				dropdown.Size = UDim2.new(1, 0, 0, 40 + (#optionsettings.List - 1) * 26)
-				dropdownchildren = Instance.new('Frame')
-				dropdownchildren.Name = 'Children'
-				dropdownchildren.Size = UDim2.new(1, 0, 0, (#optionsettings.List - 1) * 26)
-				dropdownchildren.Position = UDim2.fromOffset(0, 27)
-				dropdownchildren.BackgroundTransparency = 1
-				dropdownchildren.Parent = button
-				local ind = 0
-				for _, v in optionsettings.List do
-					if v == optionapi.Value then continue end
-					local dropdownoption = Instance.new('TextButton')
-					dropdownoption.Name = v..'Option'
-					dropdownoption.Size = UDim2.new(1, 0, 0, 26)
-					dropdownoption.Position = UDim2.fromOffset(0, ind * 26)
-					dropdownoption.BackgroundColor3 = uipallet.Main
-					dropdownoption.BorderSizePixel = 0
-					dropdownoption.AutoButtonColor = false
-					dropdownoption.Text = '         '..v
-					dropdownoption.TextXAlignment = Enum.TextXAlignment.Left
-					dropdownoption.TextColor3 = color.Dark(uipallet.Text, 0.16)
-					dropdownoption.TextSize = 13
-					dropdownoption.TextTruncate = Enum.TextTruncate.AtEnd
-					dropdownoption.FontFace = uipallet.Font
-					dropdownoption.Parent = dropdownchildren
-					dropdownoption.MouseEnter:Connect(function()
-						tween:Tween(dropdownoption, uipallet.Tween, {
-							BackgroundColor3 = color.Light(uipallet.Main, 0.02)
-						})
-					end)
-					dropdownoption.MouseLeave:Connect(function()
-						tween:Tween(dropdownoption, uipallet.Tween, {
-							BackgroundColor3 = uipallet.Main
-						})
-					end)
-					dropdownoption.MouseButton1Click:Connect(function()
-						optionapi:SetValue(v, true)
-					end)
-					ind += 1
-				end
-			else
-				optionapi:SetValue(optionapi.Value, true)
-			end
-		end)
-		dropdown.MouseEnter:Connect(function()
-			tween:Tween(bkg, uipallet.Tween, {
-				BackgroundColor3 = color.Light(uipallet.Main, 0.0875)
-			})
-		end)
-		dropdown.MouseLeave:Connect(function()
-			tween:Tween(bkg, uipallet.Tween, {
-				BackgroundColor3 = color.Light(uipallet.Main, 0.034)
-			})
-		end)
-		
-		optionapi.Object = dropdown
-		api.Options[optionsettings.Name] = optionapi
-		
-		return optionapi
-	end,
-	Font = function(optionsettings, children, api)
-		local fonts = {
-			optionsettings.Blacklist,
-			'Custom'
-		}
-		for _, v in Enum.Font:GetEnumItems() do
-			if not table.find(fonts, v.Name) then
-				table.insert(fonts, v.Name)
-			end
-		end
-		
-		local optionapi = {Value = Font.fromEnum(Enum.Font[fonts[1]])}
-		local fontdropdown
-		local fontbox
-		optionsettings.Function = optionsettings.Function or function() end
-		
-		fontdropdown = components.Dropdown({
-			Name = optionsettings.Name,
-			List = fonts,
-			Function = function(val)
-				fontbox.Object.Visible = val == 'Custom' and fontdropdown.Object.Visible
-				if val ~= 'Custom' then
-					optionapi.Value = Font.fromEnum(Enum.Font[val])
-					optionsettings.Function(optionapi.Value)
-				else
-					pcall(function()
-						optionapi.Value = Font.fromId(tonumber(fontbox.Value))
-					end)
-					optionsettings.Function(optionapi.Value)
-				end
-			end,
-			Darker = optionsettings.Darker,
-			Visible = optionsettings.Visible
-		}, children, api)
-		optionapi.Object = fontdropdown.Object
-		fontbox = components.TextBox({
-			Name = optionsettings.Name..' Asset',
-			Placeholder = 'font (rbxasset)',
-			Function = function()
-				if fontdropdown.Value == 'Custom' then
-					pcall(function()
-						optionapi.Value = Font.fromId(tonumber(fontbox.Value))
-					end)
-					optionsettings.Function(optionapi.Value)
-				end
-			end,
-			Visible = false,
-			Darker = true
-		}, children, api)
-		
-		fontdropdown.Object:GetPropertyChangedSignal('Visible'):Connect(function()
-			fontbox.Object.Visible = fontdropdown.Object.Visible and fontdropdown.Value == 'Custom'
-		end)
-		
-		return optionapi
-	end,
-	Slider = function(optionsettings, children, api)
-		local optionapi = {
-			Type = 'Slider',
-			Value = optionsettings.Default or optionsettings.Min,
-			Max = optionsettings.Max,
-			-- Exposed alongside Max so callers driving a slider through SetValue can
-			-- work out its grid and fill position without hardcoding either. Decimal
-			-- is a MULTIPLIER (see the drag handler below: floor(value * Decimal) /
-			-- Decimal), so 1000 is three places and 10000 is four.
-			Min = optionsettings.Min,
-			Decimal = optionsettings.Decimal or 1,
-			Index = getTableSize(api.Options)
-		}
-		
-		local slider = Instance.new('TextButton')
-		slider.Name = optionsettings.Name..'Slider'
-		slider.Size = UDim2.new(1, 0, 0, 50)
-		slider.BackgroundColor3 = color.Dark(children.BackgroundColor3, optionsettings.Darker and 0.02 or 0)
-		slider.BorderSizePixel = 0
-		slider.AutoButtonColor = false
-		slider.Visible = optionsettings.Visible == nil or optionsettings.Visible
-		slider.Text = ''
-		slider.Parent = children
-		addTooltip(slider, optionsettings.Tooltip)
-		local title = Instance.new('TextLabel')
-		title.Name = 'Title'
-		title.Size = UDim2.fromOffset(60, 30)
-		title.Position = UDim2.fromOffset(10, 2)
-		title.BackgroundTransparency = 1
-		title.Text = optionsettings.Name
-		title.TextXAlignment = Enum.TextXAlignment.Left
-		title.TextColor3 = color.Dark(uipallet.Text, 0.16)
-		title.TextSize = 11
-		title.FontFace = uipallet.Font
-		title.Parent = slider
-		local valuebutton = Instance.new('TextButton')
-		valuebutton.Name = 'Value'
-		valuebutton.Size = UDim2.fromOffset(60, 15)
-		valuebutton.Position = UDim2.new(1, -69, 0, 9)
-		valuebutton.BackgroundTransparency = 1
-		valuebutton.Text = optionapi.Value..(optionsettings.Suffix and ' '..(type(optionsettings.Suffix) == 'function' and optionsettings.Suffix(optionapi.Value) or optionsettings.Suffix) or '')
-		valuebutton.TextXAlignment = Enum.TextXAlignment.Right
-		valuebutton.TextColor3 = color.Dark(uipallet.Text, 0.16)
-		valuebutton.TextSize = 11
-		valuebutton.FontFace = uipallet.Font
-		valuebutton.Parent = slider
-		local valuebox = Instance.new('TextBox')
-		valuebox.Name = 'Box'
-		valuebox.Size = valuebutton.Size
-		valuebox.Position = valuebutton.Position
-		valuebox.BackgroundTransparency = 1
-		valuebox.Visible = false
-		valuebox.Text = optionapi.Value
-		valuebox.TextXAlignment = Enum.TextXAlignment.Right
-		valuebox.TextColor3 = color.Dark(uipallet.Text, 0.16)
-		valuebox.TextSize = 11
-		valuebox.FontFace = uipallet.Font
-		valuebox.ClearTextOnFocus = false
-		valuebox.Parent = slider
-		local bkg = Instance.new('Frame')
-		bkg.Name = 'Slider'
-		bkg.Size = UDim2.new(1, -20, 0, 2)
-		bkg.Position = UDim2.fromOffset(10, 37)
-		bkg.BackgroundColor3 = color.Light(uipallet.Main, 0.034)
-		bkg.BorderSizePixel = 0
-		bkg.Parent = slider
-		local fill = bkg:Clone()
-		fill.Name = 'Fill'
-		fill.Size = UDim2.fromScale(math.clamp((optionapi.Value - optionsettings.Min) / optionsettings.Max, 0.04, 0.96), 1)
-		fill.Position = UDim2.new()
-		fill.BackgroundColor3 = Color3.fromHSV(mainapi.GUIColor.Hue, mainapi.GUIColor.Sat, mainapi.GUIColor.Value)
-		fill.Parent = bkg
-		local knobholder = Instance.new('Frame')
-		knobholder.Name = 'Knob'
-		knobholder.Size = UDim2.fromOffset(24, 4)
-		knobholder.Position = UDim2.fromScale(1, 0.5)
-		knobholder.AnchorPoint = Vector2.new(0.5, 0.5)
-		knobholder.BackgroundColor3 = slider.BackgroundColor3
-		knobholder.BorderSizePixel = 0
-		knobholder.Parent = fill
-		local knob = Instance.new('Frame')
-		knob.Name = 'Knob'
-		knob.Size = UDim2.fromOffset(14, 14)
-		knob.Position = UDim2.fromScale(0.5, 0.5)
-		knob.AnchorPoint = Vector2.new(0.5, 0.5)
-		knob.BackgroundColor3 = Color3.fromHSV(mainapi.GUIColor.Hue, mainapi.GUIColor.Sat, mainapi.GUIColor.Value)
-		knob.Parent = knobholder
-		addCorner(knob, UDim.new(1, 0))
-		optionsettings.Function = optionsettings.Function or function() end
-		optionsettings.Decimal = optionsettings.Decimal or 1
-		
-		-- Fill position for an arbitrary value, normalised over the slider's own range.
-		-- SetValue's fallback when pos is nil is `value / Max`, which is only correct
-		-- for a slider whose Min is 0 -- everything else renders the handle somewhere
-		-- unrelated to the number it is displaying. Values outside [Min, Max] are fine:
-		-- SetValue clamps the visual to [0.04, 0.96] on its own, so an out-of-range
-		-- value simply pins the bar to one end while keeping its real number.
-		local function fillPosition(value)
-			local span = optionsettings.Max - optionsettings.Min
-			return span > 0 and (value - optionsettings.Min) / span or 0
+			self:SetValue(tab.Hue, tab.Sat, tab.Value, tab.Opacity)
 		end
 
-		function optionapi:Save(tab)
-			tab[optionsettings.Name] = {
-				Value = self.Value,
-				Max = self.Max
-			}
+		if settings.Visible == false then
+			row.Visible = false
 		end
-
-		function optionapi:Load(tab)
-			local newval = tab.Value == tab.Max and tab.Max ~= self.Max and self.Max or tab.Value
-			if self.Value ~= newval then
-				self:SetValue(newval, fillPosition(newval), true)
-			end
-		end
-		
-		function optionapi:Color(hue, sat, val, rainbowcheck)
-			fill.BackgroundColor3 = rainbowcheck and Color3.fromHSV(mainapi:Color((hue - (self.Index * 0.075)) % 1)) or Color3.fromHSV(hue, sat, val)
-			knob.BackgroundColor3 = fill.BackgroundColor3
-		end
-		
-		function optionapi:SetValue(value, pos, final)
-			if tonumber(value) == math.huge or value ~= value then return end
-			local check = self.Value ~= value
-			self.Value = value
-			tween:Tween(fill, uipallet.Tween, {
-				Size = UDim2.fromScale(math.clamp(pos or math.clamp(value / optionsettings.Max, 0, 1), 0.04, 0.96), 1)
-			})
-			valuebutton.Text = self.Value..(optionsettings.Suffix and ' '..(type(optionsettings.Suffix) == 'function' and optionsettings.Suffix(self.Value) or optionsettings.Suffix) or '')
-			if check or final then
-				optionsettings.Function(value, final)
-			end
-		end
-		
-		slider.InputBegan:Connect(function(inputObj)
-			if
-				(inputObj.UserInputType == Enum.UserInputType.MouseButton1 or inputObj.UserInputType == Enum.UserInputType.Touch)
-				and (inputObj.Position.Y - slider.AbsolutePosition.Y) > (20 * scale.Scale)
-			then
-				local newPosition = math.clamp((inputObj.Position.X - bkg.AbsolutePosition.X) / bkg.AbsoluteSize.X, 0, 1)
-				optionapi:SetValue(math.floor((optionsettings.Min + (optionsettings.Max - optionsettings.Min) * newPosition) * optionsettings.Decimal) / optionsettings.Decimal, newPosition)
-				local lastValue = optionapi.Value
-				local lastPosition = newPosition
-		
-				local changed = inputService.InputChanged:Connect(function(input)
-					if input.UserInputType == (inputObj.UserInputType == Enum.UserInputType.MouseButton1 and Enum.UserInputType.MouseMovement or Enum.UserInputType.Touch) then
-						local newPosition = math.clamp((input.Position.X - bkg.AbsolutePosition.X) / bkg.AbsoluteSize.X, 0, 1)
-						optionapi:SetValue(math.floor((optionsettings.Min + (optionsettings.Max - optionsettings.Min) * newPosition) * optionsettings.Decimal) / optionsettings.Decimal, newPosition)
-						lastValue = optionapi.Value
-						lastPosition = newPosition
-					end
-				end)
-		
-				local ended
-				ended = inputObj.Changed:Connect(function()
-					if inputObj.UserInputState == Enum.UserInputState.End then
-						if changed then
-							changed:Disconnect()
-						end
-						if ended then
-							ended:Disconnect()
-						end
-						optionapi:SetValue(lastValue, lastPosition, true)
-					end
-				end)
-		
-			end
-		end)
-		slider.MouseEnter:Connect(function()
-			tween:Tween(knob, uipallet.Tween, {
-				Size = UDim2.fromOffset(16, 16)
-			})
-		end)
-		slider.MouseLeave:Connect(function()
-			tween:Tween(knob, uipallet.Tween, {
-				Size = UDim2.fromOffset(14, 14)
-			})
-		end)
-		valuebutton.MouseButton1Click:Connect(function()
-			valuebutton.Visible = false
-			valuebox.Visible = true
-			valuebox.Text = optionapi.Value
-			valuebox:CaptureFocus()
-		end)
-		valuebox.FocusLost:Connect(function(enter)
-			valuebutton.Visible = true
-			valuebox.Visible = false
-			if enter and tonumber(valuebox.Text) then
-				-- Deliberately NOT clamped to [Min, Max] and NOT snapped to the Decimal
-				-- grid. The box is the escape hatch from both: typing is how you push a
-				-- slider past its Max (reach sliders, delays) or set a precision finer
-				-- than its Decimal allows, and dragging is already confined to the
-				-- range and the grid for anyone who wants that. A clamp here was
-				-- briefly added for "safety" and it silently removed the only way to
-				-- exceed a Max -- don't put it back.
-				--
-				-- The one thing that IS corrected is the fill position: passing nil
-				-- makes SetValue fall back to value / Max, which puts the handle in the
-				-- wrong place on any slider whose Min isn't 0.
-				local typed = tonumber(valuebox.Text)
-				optionapi:SetValue(typed, fillPosition(typed), true)
-			end
-		end)
-
-		optionapi.Object = slider
-		api.Options[optionsettings.Name] = optionapi
+		api.Options[settings.Name] = optionapi
+		addTooltip(row, settings.Tooltip)
 
 		return optionapi
 	end,
-	Targets = function(optionsettings, children, api)
-		local optionapi = {
-			Type = 'Targets',
-			Index = getTableSize(api.Options)
-		}
-		
-		local textlist = Instance.new('TextButton')
-		textlist.Name = 'Targets'
-		textlist.Size = UDim2.new(1, 0, 0, 50)
-		textlist.BackgroundColor3 = color.Dark(children.BackgroundColor3, optionsettings.Darker and 0.02 or 0)
-		textlist.BorderSizePixel = 0
-		textlist.AutoButtonColor = false
-		textlist.Visible = optionsettings.Visible == nil or optionsettings.Visible
-		textlist.Text = ''
-		textlist.Parent = children
-		addTooltip(textlist, optionsettings.Tooltip)
-		local bkg = Instance.new('Frame')
-		bkg.Name = 'BKG'
-		bkg.Size = UDim2.new(1, -20, 1, -9)
-		bkg.Position = UDim2.fromOffset(10, 4)
-		bkg.BackgroundColor3 = color.Light(uipallet.Main, 0.034)
-		bkg.Parent = textlist
-		addCorner(bkg, UDim.new(0, 4))
-		local button = Instance.new('TextButton')
-		button.Name = 'TextList'
-		button.Size = UDim2.new(1, -2, 1, -2)
-		button.Position = UDim2.fromOffset(1, 1)
-		button.BackgroundColor3 = uipallet.Main
-		button.AutoButtonColor = false
-		button.Text = ''
-		button.Parent = bkg
-		local buttontitle = Instance.new('TextLabel')
-		buttontitle.Name = 'Title'
-		buttontitle.Size = UDim2.new(1, -5, 0, 15)
-		buttontitle.Position = UDim2.fromOffset(5, 6)
-		buttontitle.BackgroundTransparency = 1
-		buttontitle.Text = 'Target:'
-		buttontitle.TextXAlignment = Enum.TextXAlignment.Left
-		buttontitle.TextColor3 = color.Dark(uipallet.Text, 0.16)
-		buttontitle.TextSize = 15
-		buttontitle.TextTruncate = Enum.TextTruncate.AtEnd
-		buttontitle.FontFace = uipallet.Font
-		buttontitle.Parent = button
-		local items = buttontitle:Clone()
-		items.Name = 'Items'
-		items.Position = UDim2.fromOffset(5, 21)
-		items.Text = 'Ignore none'
-		items.TextColor3 = color.Dark(uipallet.Text, 0.16)
-		items.TextSize = 11
-		items.Parent = button
-		addCorner(button, UDim.new(0, 4))
-		local tool = Instance.new('Frame')
-		tool.Size = UDim2.fromOffset(65, 12)
-		tool.Position = UDim2.fromOffset(52, 8)
-		tool.BackgroundTransparency = 1
-		tool.Parent = button
-		local toollist = Instance.new('UIListLayout')
-		toollist.FillDirection = Enum.FillDirection.Horizontal
-		toollist.Padding = UDim.new(0, 6)
-		toollist.Parent = tool
-		local window = Instance.new('TextButton')
-		window.Name = 'TargetsTextWindow'
-		window.Size = UDim2.fromOffset(220, 145)
-		window.BackgroundColor3 = uipallet.Main
-		window.BorderSizePixel = 0
-		window.AutoButtonColor = false
-		window.Visible = false
-		window.Text = ''
-		window.Parent = clickgui
-		optionapi.Window = window
-		addBlur(window)
-		addCorner(window)
-		local icon = Instance.new('ImageLabel')
-		icon.Name = 'Icon'
-		icon.Size = UDim2.fromOffset(18, 12)
-		icon.Position = UDim2.fromOffset(10, 15)
-		icon.BackgroundTransparency = 1
-		icon.Image = getcustomasset('skidv5/assets/new/targetstab.png')
-		icon.Parent = window
-		local title = Instance.new('TextLabel')
-		title.Name = 'Title'
-		title.Size = UDim2.new(1, -36, 0, 20)
-		title.Position = UDim2.fromOffset(math.abs(title.Size.X.Offset), 11)
-		title.BackgroundTransparency = 1
-		title.Text = 'Target settings'
-		title.TextXAlignment = Enum.TextXAlignment.Left
-		title.TextColor3 = uipallet.Text
-		title.TextSize = 13
-		title.FontFace = uipallet.Font
-		title.Parent = window
-		local close = addCloseButton(window)
-		optionsettings.Function = optionsettings.Function or function() end
-		
-		function optionapi:Save(tab)
-			tab.Targets = {
-				Players = self.Players.Enabled,
-				NPCs = self.NPCs.Enabled,
-				Invisible = self.Invisible.Enabled,
-				Walls = self.Walls.Enabled
-			}
-		end
-		
-		function optionapi:Load(tab)
-			if self.Players.Enabled ~= tab.Players then
-				self.Players:Toggle()
-			end
-			if self.NPCs.Enabled ~= tab.NPCs then
-				self.NPCs:Toggle()
-			end
-			if self.Invisible.Enabled ~= tab.Invisible then
-				self.Invisible:Toggle()
-			end
-			if self.Walls.Enabled ~= tab.Walls then
-				self.Walls:Toggle()
-			end
-		end
-		
-		function optionapi:Color(hue, sat, val, rainbowcheck)
-			bkg.BackgroundColor3 = rainbowcheck and Color3.fromHSV(mainapi:Color((hue - (self.Index * 0.075)) % 1)) or Color3.fromHSV(hue, sat, val)
-			if self.Players.Enabled then
-				tween:Cancel(self.Players.Object.Frame)
-				self.Players.Object.Frame.BackgroundColor3 = Color3.fromHSV(hue, sat, val)
-			end
-			if self.NPCs.Enabled then
-				tween:Cancel(self.NPCs.Object.Frame)
-				self.NPCs.Object.Frame.BackgroundColor3 = Color3.fromHSV(hue, sat, val)
-			end
-			if self.Invisible.Enabled then
-				tween:Cancel(self.Invisible.Object.Knob)
-				self.Invisible.Object.Knob.BackgroundColor3 = Color3.fromHSV(hue, sat, val)
-			end
-			if self.Walls.Enabled then
-				tween:Cancel(self.Walls.Object.Knob)
-				self.Walls.Object.Knob.BackgroundColor3 = Color3.fromHSV(hue, sat, val)
-			end
-		end
-		
-		optionapi.Players = components.TargetsButton({
-			Position = UDim2.fromOffset(11, 45),
-			Icon = getcustomasset('skidv5/assets/new/targetplayers1.png'),
-			IconSize = UDim2.fromOffset(15, 16),
-			IconParent = tool,
-			ToolIcon = getcustomasset('skidv5/assets/new/targetplayers2.png'),
-			ToolSize = UDim2.fromOffset(11, 12),
-			Tooltip = 'Players',
-			Function = optionsettings.Function
-		}, window, tool)
-		optionapi.NPCs = components.TargetsButton({
-			Position = UDim2.fromOffset(112, 45),
-			Icon = getcustomasset('skidv5/assets/new/targetnpc1.png'),
-			IconSize = UDim2.fromOffset(12, 16),
-			IconParent = tool,
-			ToolIcon = getcustomasset('skidv5/assets/new/targetnpc2.png'),
-			ToolSize = UDim2.fromOffset(9, 12),
-			Tooltip = 'NPCs',
-			Function = optionsettings.Function
-		}, window, tool)
-		optionapi.Invisible = components.Toggle({
-			Name = 'Ignore invisible',
-			Function = function()
-				local text = 'none'
-				if optionapi.Invisible.Enabled then
-					text = 'invisible'
-				end
-				if optionapi.Walls.Enabled then
-					text = text == 'none' and 'behind walls' or text..', behind walls'
-				end
-				items.Text = 'Ignore '..text
-				optionsettings.Function()
-			end
-		}, window, {Options = {}})
-		optionapi.Invisible.Object.Position = UDim2.fromOffset(0, 81)
-		optionapi.Walls = components.Toggle({
-			Name = 'Ignore behind walls',
-			Function = function()
-				local text = 'none'
-				if optionapi.Invisible.Enabled then
-					text = 'invisible'
-				end
-				if optionapi.Walls.Enabled then
-					text = text == 'none' and 'behind walls' or text..', behind walls'
-				end
-				items.Text = 'Ignore '..text
-				optionsettings.Function()
-			end
-		}, window, {Options = {}})
-		optionapi.Walls.Object.Position = UDim2.fromOffset(0, 111)
-		if optionsettings.Players then
-			optionapi.Players:Toggle()
-		end
-		if optionsettings.NPCs then
-			optionapi.NPCs:Toggle()
-		end
-		if optionsettings.Invisible then
-			optionapi.Invisible:Toggle()
-		end
-		if optionsettings.Walls then
-			optionapi.Walls:Toggle()
-		end
-		
-		close.MouseButton1Click:Connect(function()
-			window.Visible = false
-		end)
-		button.MouseButton1Click:Connect(function()
-			window.Visible = not window.Visible
-			tween:Cancel(bkg)
-			bkg.BackgroundColor3 = window.Visible and Color3.fromHSV(mainapi.GUIColor.Hue, mainapi.GUIColor.Sat, mainapi.GUIColor.Value) or color.Light(uipallet.Main, 0.37)
-		end)
-		textlist.MouseEnter:Connect(function()
-			if not optionapi.Window.Visible then
-				tween:Tween(bkg, uipallet.Tween, {
-					BackgroundColor3 = color.Light(uipallet.Main, 0.37)
-				})
-			end
-		end)
-		textlist.MouseLeave:Connect(function()
-			if not optionapi.Window.Visible then
-				tween:Tween(bkg, uipallet.Tween, {
-					BackgroundColor3 = color.Light(uipallet.Main, 0.034)
-				})
-			end
-		end)
-		textlist:GetPropertyChangedSignal('AbsolutePosition'):Connect(function()
-			if mainapi.ThreadFix then
-				setthreadidentity(8)
-			end
-			local actualPosition = (textlist.AbsolutePosition + Vector2.new(0, 60)) / scale.Scale
-			window.Position = UDim2.fromOffset(actualPosition.X + 220, actualPosition.Y)
-		end)
-		
-		optionapi.Object = textlist
-		api.Options.Targets = optionapi
-		
-		return optionapi
-	end,
-	TargetsButton = function(optionsettings, children, api)
-		local optionapi = {Enabled = false}
-		
-		local targetbutton = Instance.new('TextButton')
-		targetbutton.Size = UDim2.fromOffset(98, 31)
-		targetbutton.Position = optionsettings.Position
-		targetbutton.BackgroundColor3 = color.Light(uipallet.Main, 0.05)
-		targetbutton.AutoButtonColor = false
-		targetbutton.Visible = optionsettings.Visible == nil or optionsettings.Visible
-		targetbutton.Text = ''
-		targetbutton.Parent = children
-		addCorner(targetbutton)
-		addTooltip(targetbutton, optionsettings.Tooltip)
-		local bkg = Instance.new('Frame')
-		bkg.Size = UDim2.new(1, -2, 1, -2)
-		bkg.Position = UDim2.fromOffset(1, 1)
-		bkg.BackgroundColor3 = uipallet.Main
-		bkg.Parent = targetbutton
-		addCorner(bkg)
-		local icon = Instance.new('ImageLabel')
-		icon.Size = optionsettings.IconSize
-		icon.Position = UDim2.fromScale(0.5, 0.5)
-		icon.AnchorPoint = Vector2.new(0.5, 0.5)
-		icon.BackgroundTransparency = 1
-		icon.Image = optionsettings.Icon
-		icon.ImageColor3 = color.Light(uipallet.Main, 0.37)
-		icon.Parent = bkg
-		optionsettings.Function = optionsettings.Function or function() end
-		local tooltipicon
-		
-		function optionapi:Toggle()
-			self.Enabled = not self.Enabled
-			tween:Tween(bkg, uipallet.Tween, {
-				BackgroundColor3 = self.Enabled and Color3.fromHSV(mainapi.GUIColor.Hue, mainapi.GUIColor.Sat, mainapi.GUIColor.Value) or uipallet.Main
-			})
-			tween:Tween(icon, uipallet.Tween, {
-				ImageColor3 = self.Enabled and Color3.new(1, 1, 1) or color.Light(uipallet.Main, 0.37)
-			})
-			if tooltipicon then
-				tooltipicon:Destroy()
-			end
-			if self.Enabled then
-				tooltipicon = Instance.new('ImageLabel')
-				tooltipicon.Size = optionsettings.ToolSize
-				tooltipicon.BackgroundTransparency = 1
-				tooltipicon.Image = optionsettings.ToolIcon
-				tooltipicon.ImageColor3 = uipallet.Text
-				tooltipicon.Parent = optionsettings.IconParent
-			end
-			optionsettings.Function(self.Enabled)
-		end
-		
-		targetbutton.MouseEnter:Connect(function()
-			if not optionapi.Enabled then
-				tween:Tween(bkg, uipallet.Tween, {
-					BackgroundColor3 = Color3.fromHSV(mainapi.GUIColor.Hue, mainapi.GUIColor.Sat, mainapi.GUIColor.Value - 0.25)
-				})
-				tween:Tween(icon, uipallet.Tween, {
-					ImageColor3 = Color3.new(1, 1, 1)
-				})
-			end
-		end)
-		targetbutton.MouseLeave:Connect(function()
-			if not optionapi.Enabled then
-				tween:Tween(bkg, uipallet.Tween, {
-					BackgroundColor3 = uipallet.Main
-				})
-				tween:Tween(icon, uipallet.Tween, {
-					ImageColor3 = color.Light(uipallet.Main, 0.37)
-				})
-			end
-		end)
-		targetbutton.MouseButton1Click:Connect(function()
-			optionapi:Toggle()
-		end)
-		
-		optionapi.Object = targetbutton
-		
-		return optionapi
-	end,
-	TextBox = function(optionsettings, children, api)
+	TextBox = function(children, settings, api)
 		local optionapi = {
 			Type = 'TextBox',
-			Value = optionsettings.Default or '',
-			Index = 0
-		}
-		
-		local textbox = Instance.new('TextButton')
-		textbox.Name = optionsettings.Name..'TextBox'
-		textbox.Size = UDim2.new(1, 0, 0, 58)
-		textbox.BackgroundColor3 = color.Dark(children.BackgroundColor3, optionsettings.Darker and 0.02 or 0)
-		textbox.BorderSizePixel = 0
-		textbox.AutoButtonColor = false
-		textbox.Visible = optionsettings.Visible == nil or optionsettings.Visible
-		textbox.Text = ''
-		textbox.Parent = children
-		addTooltip(textbox, optionsettings.Tooltip)
-		local title = Instance.new('TextLabel')
-		title.Size = UDim2.new(1, -10, 0, 20)
-		title.Position = UDim2.fromOffset(10, 3)
-		title.BackgroundTransparency = 1
-		title.Text = optionsettings.Name
-		title.TextXAlignment = Enum.TextXAlignment.Left
-		title.TextColor3 = uipallet.Text
-		title.TextSize = 12
-		title.FontFace = uipallet.Font
-		title.Parent = textbox
-		local bkg = Instance.new('Frame')
-		bkg.Name = 'BKG'
-		bkg.Size = UDim2.new(1, -20, 0, 29)
-		bkg.Position = UDim2.fromOffset(10, 23)
-		bkg.BackgroundColor3 = color.Light(uipallet.Main, 0.02)
-		bkg.Parent = textbox
-		addCorner(bkg, UDim.new(0, 4))
-		local box = Instance.new('TextBox')
-		box.Size = UDim2.new(1, -8, 1, 0)
-		box.Position = UDim2.fromOffset(8, 0)
-		box.BackgroundTransparency = 1
-		box.Text = optionsettings.Default or ''
-		box.PlaceholderText = optionsettings.Placeholder or 'Click to set'
-		box.TextXAlignment = Enum.TextXAlignment.Left
-		box.TextColor3 = color.Dark(uipallet.Text, 0.16)
-		box.PlaceholderColor3 = color.Dark(uipallet.Text, 0.31)
-		box.TextSize = 12
-		box.FontFace = uipallet.Font
-		box.ClearTextOnFocus = false
-		box.Parent = bkg
-		optionsettings.Function = optionsettings.Function or function() end
-		
-		function optionapi:Save(tab)
-			tab[optionsettings.Name] = {Value = self.Value}
-		end
-		
-		function optionapi:Load(tab)
-			if self.Value ~= tab.Value then
-				self:SetValue(tab.Value)
-			end
-		end
-		
-		function optionapi:SetValue(val, enter)
-			self.Value = val
-			box.Text = val
-			optionsettings.Function(enter)
-		end
-		
-		textbox.MouseButton1Click:Connect(function()
-			box:CaptureFocus()
-		end)
-		box.FocusLost:Connect(function(enter)
-			optionapi:SetValue(box.Text, enter)
-		end)
-		box:GetPropertyChangedSignal('Text'):Connect(function()
-			optionapi:SetValue(box.Text)
-		end)
-		
-		optionapi.Object = textbox
-		api.Options[optionsettings.Name] = optionapi
-		
-		return optionapi
-	end,
-	TextList = function(optionsettings, children, api)
-		local optionapi = {
-			Type = 'TextList',
-			List = optionsettings.Default or {},
-			ListEnabled = optionsettings.Default or {},
-			Objects = {},
-			Window = {Visible = false},
+			Value = settings.Default or '',
 			Index = getTableSize(api.Options)
 		}
-		optionsettings.Color = optionsettings.Color or Color3.fromRGB(5, 134, 105)
-		
-		local textlist = Instance.new('TextButton')
-		textlist.Name = optionsettings.Name..'TextList'
-		textlist.Size = UDim2.new(1, 0, 0, 50)
-		textlist.BackgroundColor3 = color.Dark(children.BackgroundColor3, optionsettings.Darker and 0.02 or 0)
-		textlist.BorderSizePixel = 0
-		textlist.AutoButtonColor = false
-		textlist.Visible = optionsettings.Visible == nil or optionsettings.Visible
-		textlist.Text = ''
-		textlist.Parent = children
-		addTooltip(textlist, optionsettings.Tooltip)
-		local bkg = Instance.new('Frame')
-		bkg.Name = 'BKG'
-		bkg.Size = UDim2.new(1, -20, 1, -9)
-		bkg.Position = UDim2.fromOffset(10, 4)
-		bkg.BackgroundColor3 = color.Light(uipallet.Main, 0.034)
-		bkg.Parent = textlist
-		addCorner(bkg, UDim.new(0, 4))
-		local button = Instance.new('TextButton')
-		button.Name = 'TextList'
-		button.Size = UDim2.new(1, -2, 1, -2)
-		button.Position = UDim2.fromOffset(1, 1)
-		button.BackgroundColor3 = uipallet.Main
-		button.AutoButtonColor = false
-		button.Text = ''
-		button.Parent = bkg
-		local buttonicon = Instance.new('ImageLabel')
-		buttonicon.Name = 'Icon'
-		buttonicon.Size = UDim2.fromOffset(14, 12)
-		buttonicon.Position = UDim2.fromOffset(10, 14)
-		buttonicon.BackgroundTransparency = 1
-		buttonicon.Image = optionsettings.Icon or getcustomasset('skidv5/assets/new/allowedicon.png')
-		buttonicon.Parent = button
-		local buttontitle = Instance.new('TextLabel')
-		buttontitle.Name = 'Title'
-		buttontitle.Size = UDim2.new(1, -35, 0, 15)
-		buttontitle.Position = UDim2.fromOffset(35, 6)
-		buttontitle.BackgroundTransparency = 1
-		buttontitle.Text = optionsettings.Name
-		buttontitle.TextXAlignment = Enum.TextXAlignment.Left
-		buttontitle.TextColor3 = color.Dark(uipallet.Text, 0.16)
-		buttontitle.TextSize = 15
-		buttontitle.TextTruncate = Enum.TextTruncate.AtEnd
-		buttontitle.FontFace = uipallet.Font
-		buttontitle.Parent = button
-		local amount = buttontitle:Clone()
-		amount.Name = 'Amount'
-		amount.Size = UDim2.new(1, -13, 0, 15)
-		amount.Position = UDim2.fromOffset(0, 6)
-		amount.Text = '0'
-		amount.TextXAlignment = Enum.TextXAlignment.Right
-		amount.Parent = button
-		local items = buttontitle:Clone()
-		items.Name = 'Items'
-		items.Position = UDim2.fromOffset(35, 21)
-		items.Text = 'None'
-		items.TextColor3 = color.Dark(uipallet.Text, 0.43)
-		items.TextSize = 11
-		items.Parent = button
-		addCorner(button, UDim.new(0, 4))
-		local window = Instance.new('TextButton')
-		window.Name = optionsettings.Name..'TextWindow'
-		window.Size = UDim2.fromOffset(220, 85)
-		window.BackgroundColor3 = uipallet.Main
-		window.BorderSizePixel = 0
-		window.AutoButtonColor = false
-		window.Visible = false
-		window.Text = ''
-		window.Parent = api.Legit and mainapi.Legit.Window or clickgui
-		optionapi.Window = window
-		addBlur(window)
-		addCorner(window)
-		local icon = Instance.new('ImageLabel')
-		icon.Name = 'Icon'
-		icon.Size = optionsettings.TabSize or UDim2.fromOffset(19, 16)
-		icon.Position = UDim2.fromOffset(10, 13)
-		icon.BackgroundTransparency = 1
-		icon.Image = optionsettings.Tab or getcustomasset('skidv5/assets/new/allowedtab.png')
-		icon.Parent = window
-		local title = Instance.new('TextLabel')
-		title.Name = 'Title'
-		title.Size = UDim2.new(1, -36, 0, 20)
-		title.Position = UDim2.fromOffset(math.abs(title.Size.X.Offset), 11)
-		title.BackgroundTransparency = 1
-		title.Text = optionsettings.Name
-		title.TextXAlignment = Enum.TextXAlignment.Left
-		title.TextColor3 = uipallet.Text
-		title.TextSize = 13
-		title.FontFace = uipallet.Font
-		title.Parent = window
-		local close = addCloseButton(window)
-		local addbkg = Instance.new('Frame')
-		addbkg.Name = 'Add'
-		addbkg.Size = UDim2.fromOffset(200, 31)
-		addbkg.Position = UDim2.fromOffset(10, 45)
-		addbkg.BackgroundColor3 = color.Light(uipallet.Main, 0.02)
-		addbkg.Parent = window
-		addCorner(addbkg)
-		local addbox = addbkg:Clone()
-		addbox.Size = UDim2.new(1, -2, 1, -2)
-		addbox.Position = UDim2.fromOffset(1, 1)
-		addbox.BackgroundColor3 = color.Dark(uipallet.Main, 0.02)
-		addbox.Parent = addbkg
-		local addvalue = Instance.new('TextBox')
-		addvalue.Size = UDim2.new(1, -35, 1, 0)
-		addvalue.Position = UDim2.fromOffset(10, 0)
-		addvalue.BackgroundTransparency = 1
-		addvalue.Text = ''
-		addvalue.PlaceholderText = optionsettings.Placeholder or 'Add entry...'
-		addvalue.TextXAlignment = Enum.TextXAlignment.Left
-		addvalue.TextColor3 = Color3.new(1, 1, 1)
-		addvalue.TextSize = 15
-		addvalue.FontFace = uipallet.Font
-		addvalue.ClearTextOnFocus = false
-		addvalue.Parent = addbkg
-		local addbutton = Instance.new('ImageButton')
-		addbutton.Name = 'AddButton'
-		addbutton.Size = UDim2.fromOffset(16, 16)
-		addbutton.Position = UDim2.new(1, -26, 0, 8)
-		addbutton.BackgroundTransparency = 1
-		addbutton.Image = getcustomasset('skidv5/assets/new/add.png')
-		addbutton.ImageColor3 = optionsettings.Color
-		addbutton.ImageTransparency = 0.3
-		addbutton.Parent = addbkg
-		optionsettings.Function = optionsettings.Function or function() end
-		
+		local row = Instance.new('Frame')
+		row.Name = settings.Name
+		row.Size = UDim2.fromOffset(478, 40)
+		row.BackgroundColor3 = settings.Darker and color.Dark(uipallet.Main, 0.02) or uipallet.Main
+		row.BorderSizePixel = 0
+		row.Parent = children
+		addCorner(row, UDim.new(0, 4))
+		local name = Instance.new('TextLabel')
+		name.Size = UDim2.fromOffset(250, 40)
+		name.Position = UDim2.fromOffset(10, 0)
+		name.BackgroundTransparency = 1
+		name.Text = settings.Name
+		name.TextXAlignment = Enum.TextXAlignment.Left
+		name.TextColor3 = color.Dark(uipallet.Text, 0.16)
+		name.TextSize = 14
+		name.FontFace = uipallet.Font
+		name.Parent = row
+		local icon
+		local iconoffset = 0
+		if settings.Icon then
+			icon = Instance.new('ImageLabel')
+			icon.Name = 'Icon'
+			icon.Size = settings.Size or UDim2.fromOffset(14, 14)
+			icon.Position = UDim2.new(1, -(settings.Size or UDim2.fromOffset(14, 14)).X.Offset - 20, 0.5, 0)
+			icon.AnchorPoint = Vector2.new(1, 0.5)
+			icon.BackgroundTransparency = 1
+			icon.Image = settings.Icon
+			icon.ImageColor3 = color.Dark(uipallet.Text, 0.43)
+			icon.Parent = row
+			iconoffset = (settings.Size or UDim2.fromOffset(14, 14)).X.Offset + 8
+		end
+		local textbox = Instance.new('TextBox')
+		textbox.Name = 'Box'
+		textbox.Size = UDim2.fromOffset(150, 30)
+		textbox.Position = UDim2.new(1, -(iconoffset + 8), 0.5, 0)
+		textbox.AnchorPoint = Vector2.new(1, 0.5)
+		textbox.BackgroundColor3 = color.Light(uipallet.Main, 0.05)
+		textbox.BorderSizePixel = 0
+		textbox.Text = optionapi.Value
+		textbox.PlaceholderText = settings.Placeholder or ''
+		textbox.PlaceholderColor3 = color.Dark(uipallet.Text, 0.43)
+		textbox.TextColor3 = color.Dark(uipallet.Text, 0.16)
+		textbox.TextSize = 13
+		textbox.FontFace = uipallet.Font
+		textbox.TextXAlignment = Enum.TextXAlignment.Left
+		textbox.ClearTextOnFocus = true
+		textbox.Parent = row
+		addCorner(textbox, UDim.new(0, 4))
+		local textpadding = Instance.new('UIPadding')
+		textpadding.PaddingLeft = UDim.new(0, 8)
+		textpadding.PaddingRight = UDim.new(0, 8)
+		textpadding.Parent = textbox
+		settings.Function = settings.Function or function() end
+		optionapi.Object = row
+
+		function optionapi:SetValue(val)
+			self.Value = val or ''
+			textbox.Text = self.Value
+		end
+
+		textbox.FocusLost:Connect(function(enter)
+			if enter then
+				optionapi.Value = textbox.Text
+			end
+			settings.Function(enter)
+		end)
+
 		function optionapi:Save(tab)
-			tab[optionsettings.Name] = {
-				List = self.List,
-				ListEnabled = self.ListEnabled
+			tab[settings.Name] = {
+				Value = self.Value
 			}
 		end
-		
+
 		function optionapi:Load(tab)
-			self.List = tab.List or {}
-			self.ListEnabled = tab.ListEnabled or {}
-			self:ChangeValue()
+			self:SetValue(tab.Value)
 		end
-		
-		function optionapi:Color(hue, sat, val, rainbowcheck)
-			if window.Visible then
-				bkg.BackgroundColor3 = rainbowcheck and Color3.fromHSV(mainapi:Color((hue - (self.Index * 0.075)) % 1)) or Color3.fromHSV(hue, sat, val)
+
+		if settings.Visible == false then
+			row.Visible = false
+		end
+		api.Options[settings.Name] = optionapi
+		addTooltip(row, settings.Tooltip)
+
+		return optionapi
+	end,
+	TextList = function(children, settings, api)
+		local optionapi = {
+			Type = 'TextList',
+			List = {},
+			ListEnabled = {},
+			Index = getTableSize(api.Options)
+		}
+		local row = Instance.new('TextButton')
+		row.Name = settings.Name
+		row.Size = UDim2.fromOffset(478, 40)
+		row.BackgroundColor3 = settings.Darker and color.Dark(uipallet.Main, 0.02) or uipallet.Main
+		row.BorderSizePixel = 0
+		row.AutoButtonColor = false
+		row.Text = ''
+		row.Parent = children
+		addCorner(row, UDim.new(0, 4))
+		local name = Instance.new('TextLabel')
+		name.Size = UDim2.fromOffset(250, 40)
+		name.Position = UDim2.fromOffset(10, 0)
+		name.BackgroundTransparency = 1
+		name.Text = settings.Name
+		name.TextXAlignment = Enum.TextXAlignment.Left
+		name.TextColor3 = color.Dark(uipallet.Text, 0.16)
+		name.TextSize = 14
+		name.FontFace = uipallet.Font
+		name.Parent = row
+		local count = Instance.new('TextLabel')
+		count.Size = UDim2.fromOffset(120, 40)
+		count.Position = UDim2.new(1, -34, 0, 0)
+		count.AnchorPoint = Vector2.new(1, 0)
+		count.BackgroundTransparency = 1
+		count.Text = '0'
+		count.TextXAlignment = Enum.TextXAlignment.Right
+		count.TextColor3 = color.Dark(uipallet.Text, 0.43)
+		count.TextSize = 12
+		count.FontFace = uipallet.Font
+		count.Parent = row
+		local arrow = Instance.new('TextLabel')
+		arrow.Size = UDim2.fromOffset(14, 40)
+		arrow.Position = UDim2.new(1, -20, 0, 0)
+		arrow.BackgroundTransparency = 1
+		arrow.Text = '▼'
+		arrow.TextColor3 = color.Light(uipallet.Main, 0.37)
+		arrow.TextSize = 9
+		arrow.FontFace = uipallet.Font
+		arrow.Parent = row
+		local expanded = Instance.new('Frame')
+		expanded.Name = 'Expanded'
+		expanded.Size = UDim2.fromOffset(478, 0)
+		expanded.BackgroundColor3 = color.Dark(uipallet.Main, 0.02)
+		expanded.BorderSizePixel = 0
+		expanded.Visible = false
+		expanded.Parent = children
+		addCorner(expanded, UDim.new(0, 4))
+		local list = Instance.new('UIListLayout')
+		list.SortOrder = Enum.SortOrder.LayoutOrder
+		list.Padding = UDim.new(0, 2)
+		list.Parent = expanded
+		settings.Function = settings.Function or function() end
+		optionapi.Object = row
+
+		local function rebuild()
+			for _, v in expanded:GetChildren() do
+				if v:IsA('TextButton') or v:IsA('Frame') then
+					v:Destroy()
+				end
 			end
+			for i, v in optionapi.List do
+				local item = Instance.new('TextButton')
+				item.Name = 'Item'
+				item.Size = UDim2.fromOffset(458, 30)
+				item.Position = UDim2.fromOffset(10, 0)
+				item.BackgroundColor3 = color.Light(uipallet.Main, 0.02)
+				item.AutoButtonColor = false
+				item.Text = ''
+				item.LayoutOrder = i
+				item.Parent = expanded
+				addCorner(item, UDim.new(0, 4))
+				local itemname = Instance.new('TextLabel')
+				itemname.Size = UDim2.fromOffset(400, 30)
+				itemname.Position = UDim2.fromOffset(10, 0)
+				itemname.BackgroundTransparency = 1
+				itemname.Text = v
+				itemname.TextXAlignment = Enum.TextXAlignment.Left
+				itemname.TextColor3 = color.Dark(uipallet.Text, 0.16)
+				itemname.TextSize = 13
+				itemname.FontFace = uipallet.Font
+				itemname.Parent = item
+				local dot = Instance.new('Frame')
+				dot.Name = 'Dot'
+				dot.Size = UDim2.fromOffset(8, 8)
+				dot.Position = UDim2.new(1, -20, 0.5, 0)
+				dot.AnchorPoint = Vector2.new(1, 0.5)
+				dot.BackgroundColor3 = table.find(optionapi.ListEnabled, v) and Color3.fromHSV(mainapi.GUIColor.Hue, mainapi.GUIColor.Sat, mainapi.GUIColor.Value) or color.Light(uipallet.Main, 0.37)
+				dot.BorderSizePixel = 0
+				dot.Parent = item
+				addCorner(dot, UDim.new(1, 0))
+				item.MouseButton1Click:Connect(function()
+					optionapi:ChangeValue(v)
+				end)
+			end
+			local addrow = Instance.new('Frame')
+			addrow.Name = 'AddRow'
+			addrow.Size = UDim2.fromOffset(458, 30)
+			addrow.Position = UDim2.fromOffset(10, 0)
+			addrow.BackgroundColor3 = color.Light(uipallet.Main, 0.02)
+			addrow.BorderSizePixel = 0
+			addrow.LayoutOrder = #optionapi.List + 1
+			addrow.Parent = expanded
+			addCorner(addrow, UDim.new(0, 4))
+			local addtext = Instance.new('TextBox')
+			addtext.Size = UDim2.new(1, -70, 1, 0)
+			addtext.Position = UDim2.fromOffset(10, 0)
+			addtext.BackgroundTransparency = 1
+			addtext.PlaceholderText = settings.Placeholder or 'Add entry...'
+			addtext.PlaceholderColor3 = color.Dark(uipallet.Text, 0.43)
+			addtext.TextColor3 = color.Dark(uipallet.Text, 0.16)
+			addtext.TextSize = 13
+			addtext.FontFace = uipallet.Font
+			addtext.TextXAlignment = Enum.TextXAlignment.Left
+			addtext.ClearTextOnFocus = true
+			addtext.Parent = addrow
+			local addbutton = Instance.new('TextButton')
+			addbutton.Size = UDim2.fromOffset(52, 22)
+			addbutton.Position = UDim2.new(1, -58, 0.5, 0)
+			addbutton.AnchorPoint = Vector2.new(1, 0.5)
+			addbutton.BackgroundColor3 = color.Light(uipallet.Main, 0.06)
+			addbutton.BorderSizePixel = 0
+			addbutton.Text = 'ADD'
+			addbutton.TextColor3 = color.Dark(uipallet.Text, 0.43)
+			addbutton.TextSize = 10
+			addbutton.FontFace = uipallet.FontSemiBold
+			addbutton.AutoButtonColor = false
+			addbutton.Parent = addrow
+			addCorner(addbutton, UDim.new(0, 4))
+			addbutton.MouseButton1Click:Connect(function()
+				if addtext.Text ~= '' then
+					optionapi:ChangeValue(addtext.Text)
+					addtext.Text = ''
+				end
+			end)
+			count.Text = tostring(#optionapi.List)
 		end
-		
+
 		function optionapi:ChangeValue(val)
 			if val then
 				local ind = table.find(self.List, val)
@@ -1962,2370 +1455,1081 @@ components = {
 					table.insert(self.ListEnabled, val)
 				end
 			end
-		
-			optionsettings.Function(self.List)
-			for _, v in self.Objects do
-				v:Destroy()
-			end
-			table.clear(self.Objects)
-			window.Size = UDim2.fromOffset(220, 85 + (#self.List * 35))
-			amount.Text = #self.List
-		
-			local enabledtext = 'None'
-			for i, v in self.ListEnabled do
-				if i == 1 then enabledtext = '' end
-				enabledtext = enabledtext..(i == 1 and v or ', '..v)
-			end
-			items.Text = enabledtext
-		
-			for i, v in self.List do
-				local enabled = table.find(self.ListEnabled, v)
-				local object = Instance.new('TextButton')
-				object.Name = v
-				object.Size = UDim2.fromOffset(200, 32)
-				object.Position = UDim2.fromOffset(10, 47 + (i * 35))
-				object.BackgroundColor3 = color.Light(uipallet.Main, 0.02)
-				object.AutoButtonColor = false
-				object.Text = ''
-				object.Parent = window
-				addCorner(object)
-				local objectbkg = Instance.new('Frame')
-				objectbkg.Name = 'BKG'
-				objectbkg.Size = UDim2.new(1, -2, 1, -2)
-				objectbkg.Position = UDim2.fromOffset(1, 1)
-				objectbkg.BackgroundColor3 = uipallet.Main
-				objectbkg.Visible = false
-				objectbkg.Parent = object
-				addCorner(objectbkg)
-				local objectdot = Instance.new('Frame')
-				objectdot.Name = 'Dot'
-				objectdot.Size = UDim2.fromOffset(10, 11)
-				objectdot.Position = UDim2.fromOffset(10, 12)
-				objectdot.BackgroundColor3 = enabled and optionsettings.Color or color.Light(uipallet.Main, 0.37)
-				objectdot.Parent = object
-				addCorner(objectdot, UDim.new(1, 0))
-				local objectdotin = objectdot:Clone()
-				objectdotin.Size = UDim2.fromOffset(8, 9)
-				objectdotin.Position = UDim2.fromOffset(1, 1)
-				objectdotin.BackgroundColor3 = enabled and optionsettings.Color or color.Light(uipallet.Main, 0.02)
-				objectdotin.Parent = objectdot
-				local objecttitle = Instance.new('TextLabel')
-				objecttitle.Name = 'Title'
-				objecttitle.Size = UDim2.new(1, -30, 1, 0)
-				objecttitle.Position = UDim2.fromOffset(30, 0)
-				objecttitle.BackgroundTransparency = 1
-				objecttitle.Text = v
-				objecttitle.TextXAlignment = Enum.TextXAlignment.Left
-				objecttitle.TextColor3 = color.Dark(uipallet.Text, 0.16)
-				objecttitle.TextSize = 15
-				objecttitle.FontFace = uipallet.Font
-				objecttitle.Parent = object
-				local close = Instance.new('ImageButton')
-				close.Name = 'Close'
-				close.Size = UDim2.fromOffset(16, 16)
-				close.Position = UDim2.new(1, -26, 0, 8)
-				close.BackgroundColor3 = Color3.new(1, 1, 1)
-				close.BackgroundTransparency = 1
-				close.AutoButtonColor = false
-				close.Image = getcustomasset('skidv5/assets/new/closemini.png')
-				close.ImageColor3 = color.Light(uipallet.Text, 0.2)
-				close.ImageTransparency = 0.5
-				close.Parent = object
-				addCorner(close, UDim.new(1, 0))
-		
-				close.MouseEnter:Connect(function()
-					close.ImageTransparency = 0.3
-					tween:Tween(close, uipallet.Tween, {
-						BackgroundTransparency = 0.6
-					})
-				end)
-				close.MouseLeave:Connect(function()
-					close.ImageTransparency = 0.5
-					tween:Tween(close, uipallet.Tween, {
-						BackgroundTransparency = 1
-					})
-				end)
-				close.MouseButton1Click:Connect(function()
-					self:ChangeValue(v)
-				end)
-				object.MouseEnter:Connect(function()
-					objectbkg.Visible = true
-				end)
-				object.MouseLeave:Connect(function()
-					objectbkg.Visible = false
-				end)
-				object.MouseButton1Click:Connect(function()
-					local ind = table.find(self.ListEnabled, v)
-					if ind then
-						table.remove(self.ListEnabled, ind)
-						objectdot.BackgroundColor3 = color.Light(uipallet.Main, 0.37)
-						objectdotin.BackgroundColor3 = color.Light(uipallet.Main, 0.02)
-					else
-						table.insert(self.ListEnabled, v)
-						objectdot.BackgroundColor3 = optionsettings.Color
-						objectdotin.BackgroundColor3 = optionsettings.Color
-					end
-		
-					local enabledtext = 'None'
-					for i, v in self.ListEnabled do
-						if i == 1 then enabledtext = '' end
-						enabledtext = enabledtext..(i == 1 and v or ', '..v)
-					end
-		
-					items.Text = enabledtext
-					optionsettings.Function()
-				end)
-		
-				table.insert(self.Objects, object)
-			end
+			rebuild()
+			settings.Function(self.List)
 		end
-		
-		addbutton.MouseEnter:Connect(function()
-			addbutton.ImageTransparency = 0
-		end)
-		addbutton.MouseLeave:Connect(function()
-			addbutton.ImageTransparency = 0.3
-		end)
-		addbutton.MouseButton1Click:Connect(function()
-			if not table.find(optionapi.List, addvalue.Text) then
-				optionapi:ChangeValue(addvalue.Text)
-				addvalue.Text = ''
-			end
-		end)
-		addvalue.FocusLost:Connect(function(enter)
-			if enter and not table.find(optionapi.List, addvalue.Text) then
-				optionapi:ChangeValue(addvalue.Text)
-				addvalue.Text = ''
-			end
-		end)
-		addvalue.MouseEnter:Connect(function()
-			tween:Tween(addbkg, uipallet.Tween, {
-				BackgroundColor3 = color.Light(uipallet.Main, 0.14)
-			})
-		end)
-		addvalue.MouseLeave:Connect(function()
-			tween:Tween(addbkg, uipallet.Tween, {
-				BackgroundColor3 = color.Light(uipallet.Main, 0.02)
-			})
-		end)
-		close.MouseButton1Click:Connect(function()
-			window.Visible = false
-		end)
-		button.MouseButton1Click:Connect(function()
-			window.Visible = not window.Visible
-			tween:Cancel(bkg)
-			bkg.BackgroundColor3 = window.Visible and Color3.fromHSV(mainapi.GUIColor.Hue, mainapi.GUIColor.Sat, mainapi.GUIColor.Value) or color.Light(uipallet.Main, 0.37)
-		end)
-		textlist.MouseEnter:Connect(function()
-			if not optionapi.Window.Visible then
-				tween:Tween(bkg, uipallet.Tween, {
-					BackgroundColor3 = color.Light(uipallet.Main, 0.37)
-				})
-			end
-		end)
-		textlist.MouseLeave:Connect(function()
-			if not optionapi.Window.Visible then
-				tween:Tween(bkg, uipallet.Tween, {
-					BackgroundColor3 = color.Light(uipallet.Main, 0.034)
-				})
-			end
-		end)
-		textlist:GetPropertyChangedSignal('AbsolutePosition'):Connect(function()
-			if mainapi.ThreadFix then
-				setthreadidentity(8)
-			end
-			local actualPosition = (textlist.AbsolutePosition - (api.Legit and mainapi.Legit.Window.AbsolutePosition or -guiService:GetGuiInset())) / scale.Scale
-			window.Position = UDim2.fromOffset(actualPosition.X + 220, actualPosition.Y)
-		end)
-		
-		if optionsettings.Default then
-			optionapi:ChangeValue()
+
+		function optionapi:SetValue(val)
+			self.List = table.clone(val or {})
+			self.ListEnabled = table.clone(val or {})
+			rebuild()
+			settings.Function(self.List)
 		end
-		optionapi.Object = textlist
-		api.Options[optionsettings.Name] = optionapi
-		
+
+		row.MouseButton1Click:Connect(function()
+			expanded.Visible = not expanded.Visible
+			arrow.Rotation = expanded.Visible and 180 or 0
+			if expanded.Visible then
+				local content = 0
+				for _, v in expanded:GetChildren() do
+					if v:IsA('TextButton') or v:IsA('Frame') then
+						content += v.Size.Y.Offset + 2
+					end
+				end
+				expanded.Size = UDim2.fromOffset(478, math.min(content, 240))
+			end
+		end)
+
+		function optionapi:Save(tab)
+			tab[settings.Name] = {
+				List = self.List,
+				ListEnabled = self.ListEnabled
+			}
+		end
+
+		function optionapi:Load(tab)
+			self.List = table.clone(tab.List or {})
+			self.ListEnabled = table.clone(tab.ListEnabled or {})
+			rebuild()
+			settings.Function(self.List)
+		end
+
+		if settings.Visible == false then
+			row.Visible = false
+		end
+		rebuild()
+		api.Options[settings.Name] = optionapi
+		addTooltip(row, settings.Tooltip)
+
 		return optionapi
 	end,
-	Toggle = function(optionsettings, children, api)
+	Font = function(children, settings, api)
 		local optionapi = {
-			Type = 'Toggle',
+			Type = 'Font',
+			Value = Font.new('Arial'),
+			Index = getTableSize(api.Options)
+		}
+		local row = Instance.new('TextButton')
+		row.Name = settings.Name
+		row.Size = UDim2.fromOffset(478, 40)
+		row.BackgroundColor3 = settings.Darker and color.Dark(uipallet.Main, 0.02) or uipallet.Main
+		row.BorderSizePixel = 0
+		row.AutoButtonColor = false
+		row.Text = ''
+		row.Parent = children
+		addCorner(row, UDim.new(0, 4))
+		local name = Instance.new('TextLabel')
+		name.Size = UDim2.fromOffset(250, 40)
+		name.Position = UDim2.fromOffset(10, 0)
+		name.BackgroundTransparency = 1
+		name.Text = settings.Name
+		name.TextXAlignment = Enum.TextXAlignment.Left
+		name.TextColor3 = color.Dark(uipallet.Text, 0.16)
+		name.TextSize = 14
+		name.FontFace = uipallet.Font
+		name.Parent = row
+		local value = Instance.new('TextLabel')
+		value.Size = UDim2.fromOffset(170, 40)
+		value.Position = UDim2.new(1, -34, 0, 0)
+		value.AnchorPoint = Vector2.new(1, 0)
+		value.BackgroundTransparency = 1
+		value.Text = 'Arial'
+		value.TextXAlignment = Enum.TextXAlignment.Right
+		value.TextColor3 = color.Dark(uipallet.Text, 0.43)
+		value.TextSize = 12
+		value.FontFace = uipallet.Font
+		value.Parent = row
+		local arrow = Instance.new('TextLabel')
+		arrow.Size = UDim2.fromOffset(14, 40)
+		arrow.Position = UDim2.new(1, -20, 0, 0)
+		arrow.BackgroundTransparency = 1
+		arrow.Text = '▼'
+		arrow.TextColor3 = color.Light(uipallet.Main, 0.37)
+		arrow.TextSize = 9
+		arrow.FontFace = uipallet.Font
+		arrow.Parent = row
+		local window = children.Parent
+		local dropdown = Instance.new('Frame')
+		dropdown.Name = 'Dropdown'
+		dropdown.Size = UDim2.fromOffset(478, 0)
+		dropdown.BackgroundColor3 = color.Dark(uipallet.Main, 0.03)
+		dropdown.BorderSizePixel = 0
+		dropdown.Visible = false
+		dropdown.ZIndex = 8
+		dropdown.Parent = window
+		addCorner(dropdown, UDim.new(0, 4))
+		local list = Instance.new('ScrollingFrame')
+		list.Size = UDim2.fromScale(1, 1)
+		list.BackgroundTransparency = 1
+		list.BorderSizePixel = 0
+		list.ScrollBarThickness = 2
+		list.ScrollBarImageTransparency = 0.75
+		list.AutomaticCanvasSize = Enum.AutomaticSize.Y
+		list.CanvasSize = UDim2.fromOffset(0, 0)
+		list.Parent = dropdown
+		local listlayout = Instance.new('UIListLayout')
+		listlayout.SortOrder = Enum.SortOrder.LayoutOrder
+		listlayout.Padding = UDim.new(0, 2)
+		listlayout.Parent = list
+		settings.Function = settings.Function or function() end
+		optionapi.Object = row
+
+		local fonts = {}
+		for _, font in Enum.Font:GetEnumItems() do
+			if font.Name ~= (settings.Blacklist or '') then
+				table.insert(fonts, font)
+			end
+		end
+
+		local function openDropdown()
+			local pos = row.AbsolutePosition - window.AbsolutePosition
+			dropdown.Position = UDim2.fromOffset(pos.X, pos.Y + 40)
+			dropdown.Size = UDim2.fromOffset(478, math.min(#fonts * 32 + 4, 240))
+			dropdown.Visible = true
+		end
+
+		for i, font in fonts do
+			local item = Instance.new('TextButton')
+			item.Name = font.Name
+			item.Size = UDim2.fromOffset(478, 30)
+			item.BackgroundColor3 = Color3.new(1, 1, 1)
+			item.BackgroundTransparency = 1
+			item.AutoButtonColor = false
+			item.Text = ''
+			item.LayoutOrder = i
+			item.Parent = list
+			local itemname = Instance.new('TextLabel')
+			itemname.Size = UDim2.fromOffset(440, 30)
+			itemname.Position = UDim2.fromOffset(10, 0)
+			itemname.BackgroundTransparency = 1
+			itemname.Text = font.Name
+			itemname.TextXAlignment = Enum.TextXAlignment.Left
+			itemname.TextColor3 = color.Dark(uipallet.Text, 0.16)
+			itemname.TextSize = 13
+			itemname.FontFace = Font.new(font.Name)
+			itemname.Parent = item
+			item.MouseEnter:Connect(function()
+				item.BackgroundColor3 = color.Light(uipallet.Main, 0.02)
+			end)
+			item.MouseLeave:Connect(function()
+				item.BackgroundColor3 = Color3.new(1, 1, 1)
+				item.BackgroundTransparency = 1
+			end)
+			item.MouseButton1Click:Connect(function()
+				optionapi:SetValue(Font.new(font.Name), true)
+				dropdown.Visible = false
+			end)
+		end
+
+		function optionapi:SetValue(font, mouse)
+			self.Value = font
+			value.Text = font.Name
+			settings.Function()
+		end
+
+		row.MouseButton1Click:Connect(function()
+			if dropdown.Visible then
+				dropdown.Visible = false
+			else
+				openDropdown()
+			end
+		end)
+
+		if settings.Visible == false then
+			row.Visible = false
+		end
+		api.Options[settings.Name] = optionapi
+		addTooltip(row, settings.Tooltip)
+
+		return optionapi
+	end,
+	Targets = function(children, settings, api)
+		local optionapi = {
+			Type = 'Targets',
+			Players = {Enabled = false},
+			NPCs = {Enabled = false},
+			Invisible = {Enabled = false},
+			Walls = {Enabled = false},
+			Index = getTableSize(api.Options)
+		}
+		local row = Instance.new('TextButton')
+		row.Name = settings.Name
+		row.Size = UDim2.fromOffset(478, 40)
+		row.BackgroundColor3 = settings.Darker and color.Dark(uipallet.Main, 0.02) or uipallet.Main
+		row.BorderSizePixel = 0
+		row.AutoButtonColor = false
+		row.Text = ''
+		row.Parent = children
+		addCorner(row, UDim.new(0, 4))
+		local name = Instance.new('TextLabel')
+		name.Size = UDim2.fromOffset(250, 40)
+		name.Position = UDim2.fromOffset(10, 0)
+		name.BackgroundTransparency = 1
+		name.Text = settings.Name
+		name.TextXAlignment = Enum.TextXAlignment.Left
+		name.TextColor3 = color.Dark(uipallet.Text, 0.16)
+		name.TextSize = 14
+		name.FontFace = uipallet.Font
+		name.Parent = row
+		local arrow = Instance.new('TextLabel')
+		arrow.Size = UDim2.fromOffset(14, 40)
+		arrow.Position = UDim2.new(1, -20, 0, 0)
+		arrow.BackgroundTransparency = 1
+		arrow.Text = '▼'
+		arrow.TextColor3 = color.Light(uipallet.Main, 0.37)
+		arrow.TextSize = 9
+		arrow.FontFace = uipallet.Font
+		arrow.Parent = row
+		local expanded = Instance.new('Frame')
+		expanded.Name = 'Expanded'
+		expanded.Size = UDim2.fromOffset(478, 0)
+		expanded.BackgroundColor3 = color.Dark(uipallet.Main, 0.02)
+		expanded.BorderSizePixel = 0
+		expanded.Visible = false
+		expanded.Parent = children
+		addCorner(expanded, UDim.new(0, 4))
+		local list = Instance.new('UIListLayout')
+		list.SortOrder = Enum.SortOrder.LayoutOrder
+		list.Padding = UDim.new(0, 2)
+		list.Parent = expanded
+		settings.Function = settings.Function or function() end
+		optionapi.Object = row
+
+		local function createSub(subname, key, enabled)
+			local subapi = {
+				Name = subname,
+				Enabled = enabled or false,
+				Index = getTableSize(expanded:GetChildren())
+			}
+			local subrow = Instance.new('TextButton')
+			subrow.Name = subname
+			subrow.Size = UDim2.fromOffset(458, 30)
+			subrow.Position = UDim2.fromOffset(10, 0)
+			subrow.BackgroundColor3 = color.Light(uipallet.Main, 0.02)
+			subrow.AutoButtonColor = false
+			subrow.Text = ''
+			subrow.Parent = expanded
+			addCorner(subrow, UDim.new(0, 4))
+			local subname2 = Instance.new('TextLabel')
+			subname2.Size = UDim2.fromOffset(350, 30)
+			subname2.Position = UDim2.fromOffset(10, 0)
+			subname2.BackgroundTransparency = 1
+			subname2.Text = subname
+			subname2.TextXAlignment = Enum.TextXAlignment.Left
+			subname2.TextColor3 = color.Dark(uipallet.Text, 0.16)
+			subname2.TextSize = 13
+			subname2.FontFace = uipallet.Font
+			subname2.Parent = subrow
+			local knob = Instance.new('Frame')
+			knob.Name = 'Knob'
+			knob.Size = UDim2.fromOffset(36, 18)
+			knob.Position = UDim2.new(1, -10, 0.5, 0)
+			knob.AnchorPoint = Vector2.new(1, 0.5)
+			knob.BackgroundColor3 = color.Light(uipallet.Main, 0.14)
+			knob.BorderSizePixel = 0
+			knob.Parent = subrow
+			addCorner(knob, UDim.new(1, 0))
+			local knobinner = Instance.new('Frame')
+			knobinner.Name = 'KnobInner'
+			knobinner.Size = UDim2.fromOffset(28, 14)
+			knobinner.Position = UDim2.fromOffset(3, 2)
+			knobinner.BackgroundColor3 = color.Light(uipallet.Main, 0.5)
+			knobinner.BorderSizePixel = 0
+			knobinner.Parent = knob
+			addCorner(knobinner, UDim.new(1, 0))
+			subapi.Object = subrow
+			subapi.Knob = knob
+
+			function subapi:Toggle()
+				self.Enabled = not self.Enabled
+				if self.Enabled then
+					local accent = Color3.fromHSV(mainapi.GUIColor.Hue, mainapi.GUIColor.Sat, mainapi.GUIColor.Value)
+					knob.BackgroundColor3 = accent
+					knobinner.BackgroundColor3 = color.Light(accent, 0.65)
+					tween:Tween(knobinner, uipallet.Tween, {
+						Position = UDim2.fromOffset(5, 2)
+					})
+				else
+					knob.BackgroundColor3 = color.Light(uipallet.Main, 0.14)
+					knobinner.BackgroundColor3 = color.Light(uipallet.Main, 0.5)
+					tween:Tween(knobinner, uipallet.Tween, {
+						Position = UDim2.fromOffset(3, 2)
+					})
+				end
+				settings.Function(self.Enabled)
+			end
+
+			function subapi:Color(h, s, v, rainbow)
+				if self.Enabled then
+					knob.BackgroundColor3 = accentColor(h, s, v, rainbow, subapi.Index)
+					knobinner.BackgroundColor3 = color.Light(accentColor(h, s, v, rainbow, subapi.Index), 0.65)
+				end
+			end
+
+			subrow.MouseButton1Click:Connect(function()
+				subapi:Toggle()
+			end)
+
+			optionapi[key] = subapi
+		end
+
+		createSub('Players', 'Players', settings.Players)
+		createSub('NPCs', 'NPCs', settings.NPCs)
+		createSub('Invisible', 'Invisible', settings.Invisible)
+		createSub('Walls', 'Walls', settings.Walls)
+
+		row.MouseButton1Click:Connect(function()
+			expanded.Visible = not expanded.Visible
+			arrow.Rotation = expanded.Visible and 180 or 0
+			if expanded.Visible then
+				expanded.Size = UDim2.fromOffset(478, 128)
+			end
+		end)
+
+		function optionapi:Save(tab)
+			tab[settings.Name] = {
+				Players = self.Players.Enabled,
+				NPCs = self.NPCs.Enabled,
+				Invisible = self.Invisible.Enabled,
+				Walls = self.Walls.Enabled
+			}
+		end
+
+		function optionapi:Load(tab)
+			for key, sub in {Players = self.Players, NPCs = self.NPCs, Invisible = self.Invisible, Walls = self.Walls} do
+				if sub.Enabled ~= tab[key] then
+					sub:Toggle()
+				end
+			end
+		end
+
+		function optionapi:Color(h, s, v, rainbow)
+			for _, sub in {self.Players, self.NPCs, self.Invisible, self.Walls} do
+				if sub.Enabled then
+					sub:Color(h, s, v, rainbow)
+				end
+			end
+		end
+
+		if settings.Visible == false then
+			row.Visible = false
+		end
+		api.Options[settings.Name] = optionapi
+		addTooltip(row, settings.Tooltip)
+
+		return optionapi
+	end,
+	Button = function(children, settings, api)
+		local optionapi = {
 			Enabled = false,
 			Index = getTableSize(api.Options)
 		}
-		
-		local hovered = false
-		local toggle = Instance.new('TextButton')
-		toggle.Name = optionsettings.Name..'Toggle'
-		toggle.Size = UDim2.new(1, 0, 0, 30)
-		toggle.BackgroundColor3 = color.Dark(children.BackgroundColor3, optionsettings.Darker and 0.02 or 0)
-		toggle.BorderSizePixel = 0
-		toggle.AutoButtonColor = false
-		toggle.Visible = optionsettings.Visible == nil or optionsettings.Visible
-		toggle.Text = '          '..optionsettings.Name
-		toggle.TextXAlignment = Enum.TextXAlignment.Left
-		toggle.TextColor3 = color.Dark(uipallet.Text, 0.16)
-		toggle.TextSize = 14
-		toggle.FontFace = uipallet.Font
-		toggle.Parent = children
-		addTooltip(toggle, optionsettings.Tooltip)
-		local knobholder = Instance.new('Frame')
-		knobholder.Name = 'Knob'
-		knobholder.Size = UDim2.fromOffset(22, 12)
-		knobholder.Position = UDim2.new(1, -30, 0, 9)
-		knobholder.BackgroundColor3 = color.Light(uipallet.Main, 0.14)
-		knobholder.Parent = toggle
-		addCorner(knobholder, UDim.new(1, 0))
-		local knob = knobholder:Clone()
-		knob.Size = UDim2.fromOffset(8, 8)
-		knob.Position = UDim2.fromOffset(2, 2)
-		knob.BackgroundColor3 = uipallet.Main
-		knob.Parent = knobholder
-		optionsettings.Function = optionsettings.Function or function() end
-		
-		function optionapi:Save(tab)
-			tab[optionsettings.Name] = {Enabled = self.Enabled}
-		end
-		
-		function optionapi:Load(tab)
-			if self.Enabled ~= tab.Enabled then
-				self:Toggle()
-			end
-		end
-		
-		function optionapi:Color(hue, sat, val, rainbowcheck)
-			if self.Enabled then
-				tween:Cancel(knobholder)
-				knobholder.BackgroundColor3 = rainbowcheck and Color3.fromHSV(mainapi:Color((hue - (self.Index * 0.075)) % 1)) or Color3.fromHSV(hue, sat, val)
-			end
-		end
-		
-		function optionapi:Toggle()
-			self.Enabled = not self.Enabled
-			local rainbowcheck = mainapi.GUIColor.Rainbow and mainapi.RainbowMode.Value ~= 'Retro'
-			tween:Tween(knobholder, uipallet.Tween, {
-				BackgroundColor3 = self.Enabled and (rainbowcheck and Color3.fromHSV(mainapi:Color((mainapi.GUIColor.Hue - (self.Index * 0.075)) % 1)) or Color3.fromHSV(mainapi.GUIColor.Hue, mainapi.GUIColor.Sat, mainapi.GUIColor.Value)) or (hovered and color.Light(uipallet.Main, 0.37) or color.Light(uipallet.Main, 0.14))
-			})
-			tween:Tween(knob, uipallet.Tween, {
-				Position = UDim2.fromOffset(self.Enabled and 12 or 2, 2)
-			})
-			optionsettings.Function(self.Enabled)
-		end
-		
-		toggle.MouseEnter:Connect(function()
-			hovered = true
-			if not optionapi.Enabled then
-				tween:Tween(knobholder, uipallet.Tween, {
-					BackgroundColor3 = color.Light(uipallet.Main, 0.37)
-				})
-			end
-		end)
-		toggle.MouseLeave:Connect(function()
-			hovered = false
-			if not optionapi.Enabled then
-				tween:Tween(knobholder, uipallet.Tween, {
-					BackgroundColor3 = color.Light(uipallet.Main, 0.14)
-				})
-			end
-		end)
-		toggle.MouseButton1Click:Connect(function()
-			optionapi:Toggle()
-		end)
-		
-		if optionsettings.Default then
-			optionapi:Toggle()
-		end
-		optionapi.Object = toggle
-		api.Options[optionsettings.Name] = optionapi
-		
-		return optionapi
-	end,
-	TwoSlider = function(optionsettings, children, api)
-		local optionapi = {
-			Type = 'TwoSlider',
-			ValueMin = optionsettings.DefaultMin or optionsettings.Min,
-			ValueMax = optionsettings.DefaultMax or 10,
-			Max = optionsettings.Max,
-			Index = getTableSize(api.Options)
-		}
-		
-		local slider = Instance.new('TextButton')
-		slider.Name = optionsettings.Name..'Slider'
-		slider.Size = UDim2.new(1, 0, 0, 50)
-		slider.BackgroundColor3 = color.Dark(children.BackgroundColor3, optionsettings.Darker and 0.02 or 0)
-		slider.BorderSizePixel = 0
-		slider.AutoButtonColor = false
-		slider.Visible = optionsettings.Visible == nil or optionsettings.Visible
-		slider.Text = ''
-		slider.Parent = children
-		addTooltip(slider, optionsettings.Tooltip)
-		local title = Instance.new('TextLabel')
-		title.Name = 'Title'
-		title.Size = UDim2.fromOffset(60, 30)
-		title.Position = UDim2.fromOffset(10, 2)
-		title.BackgroundTransparency = 1
-		title.Text = optionsettings.Name
-		title.TextXAlignment = Enum.TextXAlignment.Left
-		title.TextColor3 = color.Dark(uipallet.Text, 0.16)
-		title.TextSize = 11
-		title.FontFace = uipallet.Font
-		title.Parent = slider
-		local valuebutton = Instance.new('TextButton')
-		valuebutton.Name = 'Value'
-		valuebutton.Size = UDim2.fromOffset(60, 15)
-		valuebutton.Position = UDim2.new(1, -69, 0, 9)
-		valuebutton.BackgroundTransparency = 1
-		valuebutton.Text = optionapi.ValueMax
-		valuebutton.TextXAlignment = Enum.TextXAlignment.Right
-		valuebutton.TextColor3 = color.Dark(uipallet.Text, 0.16)
-		valuebutton.TextSize = 11
-		valuebutton.FontFace = uipallet.Font
-		valuebutton.Parent = slider
-		local valuebutton2 = valuebutton:Clone()
-		valuebutton2.Position = UDim2.new(1, -125, 0, 9)
-		valuebutton2.Text = optionapi.ValueMin
-		valuebutton2.Parent = slider
-		local valuebox = Instance.new('TextBox')
-		valuebox.Name = 'Box'
-		valuebox.Size = valuebutton.Size
-		valuebox.Position = valuebutton.Position
-		valuebox.BackgroundTransparency = 1
-		valuebox.Visible = false
-		valuebox.Text = optionapi.ValueMin
-		valuebox.TextXAlignment = Enum.TextXAlignment.Right
-		valuebox.TextColor3 = color.Dark(uipallet.Text, 0.16)
-		valuebox.TextSize = 11
-		valuebox.FontFace = uipallet.Font
-		valuebox.ClearTextOnFocus = false
-		valuebox.Parent = slider
-		local valuebox2 = valuebox:Clone()
-		valuebox2.Position = valuebutton2.Position
-		valuebox2.Parent = slider
-		local bkg = Instance.new('Frame')
-		bkg.Name = 'Slider'
-		bkg.Size = UDim2.new(1, -20, 0, 2)
-		bkg.Position = UDim2.fromOffset(10, 37)
-		bkg.BackgroundColor3 = color.Light(uipallet.Main, 0.034)
-		bkg.BorderSizePixel = 0
-		bkg.Parent = slider
-		local fill = bkg:Clone()
-		fill.Name = 'Fill'
-		fill.Position = UDim2.fromScale(math.clamp(optionapi.ValueMin / optionsettings.Max, 0.04, 0.96), 0)
-		fill.Size = UDim2.fromScale(math.clamp(math.clamp(optionapi.ValueMax / optionsettings.Max, 0, 1), 0.04, 0.96) - fill.Position.X.Scale, 1)
-		fill.BackgroundColor3 = Color3.fromHSV(mainapi.GUIColor.Hue, mainapi.GUIColor.Sat, mainapi.GUIColor.Value)
-		fill.Parent = bkg
-		local knobholder = Instance.new('Frame')
-		knobholder.Name = 'Knob'
-		knobholder.Size = UDim2.fromOffset(16, 4)
-		knobholder.Position = UDim2.fromScale(0, 0.5)
-		knobholder.AnchorPoint = Vector2.new(0.5, 0.5)
-		knobholder.BackgroundColor3 = slider.BackgroundColor3
-		knobholder.BorderSizePixel = 0
-		knobholder.Parent = fill
-		local knob = Instance.new('ImageLabel')
-		knob.Name = 'Knob'
-		knob.Size = UDim2.fromOffset(9, 16)
-		knob.Position = UDim2.fromScale(0.5, 0.5)
-		knob.AnchorPoint = Vector2.new(0.5, 0.5)
-		knob.BackgroundTransparency = 1
-		knob.Image = getcustomasset('skidv5/assets/new/range.png')
-		knob.ImageColor3 = Color3.fromHSV(mainapi.GUIColor.Hue, mainapi.GUIColor.Sat, mainapi.GUIColor.Value)
-		knob.Parent = knobholder
-		local knobholdermax = knobholder:Clone()
-		knobholdermax.Name = 'KnobMax'
-		knobholdermax.Position = UDim2.fromScale(1, 0.5)
-		knobholdermax.Parent = fill
-		knobholdermax.Knob.Rotation = 180
-		local arrow = Instance.new('ImageLabel')
-		arrow.Name = 'Arrow'
-		arrow.Size = UDim2.fromOffset(12, 6)
-		arrow.Position = UDim2.new(1, -56, 0, 10)
+		local button = Instance.new('TextButton')
+		button.Name = settings.Name
+		button.Size = UDim2.fromOffset(478, 40)
+		button.BackgroundColor3 = settings.Darker and color.Dark(uipallet.Main, 0.02) or uipallet.Main
+		button.BorderSizePixel = 0
+		button.AutoButtonColor = false
+		button.Text = settings.Name
+		button.TextColor3 = color.Dark(uipallet.Text, 0.16)
+		button.TextSize = 14
+		button.FontFace = uipallet.Font
+		button.Parent = children
+		addCorner(button, UDim.new(0, 4))
+		local arrow = Instance.new('TextLabel')
+		arrow.Size = UDim2.fromOffset(14, 40)
+		arrow.Position = UDim2.new(1, -20, 0, 0)
 		arrow.BackgroundTransparency = 1
-		arrow.Image = getcustomasset('skidv5/assets/new/rangearrow.png')
-		arrow.ImageColor3 = color.Light(uipallet.Main, 0.14)
-		arrow.Parent = slider
-		optionsettings.Function = optionsettings.Function or function() end
-		optionsettings.Decimal = optionsettings.Decimal or 1
-		local random = Random.new()
-		
-		function optionapi:Save(tab)
-			tab[optionsettings.Name] = {ValueMin = self.ValueMin, ValueMax = self.ValueMax}
+		arrow.Text = '›'
+		arrow.TextColor3 = color.Light(uipallet.Main, 0.37)
+		arrow.TextSize = 16
+		arrow.FontFace = uipallet.Font
+		arrow.Parent = button
+		optionapi.Name = settings.Name
+		optionapi.Object = button
+		button.MouseButton1Click:Connect(function()
+			settings.Function()
+		end)
+		button.MouseEnter:Connect(function()
+			button.BackgroundColor3 = color.Light(uipallet.Main, 0.02)
+		end)
+		button.MouseLeave:Connect(function()
+			button.BackgroundColor3 = settings.Darker and color.Dark(uipallet.Main, 0.02) or uipallet.Main
+		end)
+		if settings.Visible == false then
+			button.Visible = false
 		end
-		
-		function optionapi:Load(tab)
-			if self.ValueMin ~= tab.ValueMin then
-				self:SetValue(false, tab.ValueMin)
-			end
-			if self.ValueMax ~= tab.ValueMax then
-				self:SetValue(true, tab.ValueMax)
-			end
-		end
-		
-		function optionapi:Color(hue, sat, val, rainbowcheck)
-			fill.BackgroundColor3 = rainbowcheck and Color3.fromHSV(mainapi:Color((hue - (self.Index * 0.075)) % 1)) or Color3.fromHSV(hue, sat, val)
-			knob.ImageColor3 = fill.BackgroundColor3
-			knobholdermax.Knob.ImageColor3 = fill.BackgroundColor3
-		end
-		
-		function optionapi:GetRandomValue()
-			return random:NextNumber(optionapi.ValueMin, optionapi.ValueMax)
-		end
-		
-		function optionapi:SetValue(max, value)
-			if tonumber(value) == math.huge or value ~= value then return end
-			self[max and 'ValueMax' or 'ValueMin'] = value
-			valuebutton.Text = self.ValueMax
-			valuebutton2.Text = self.ValueMin
-			local size = math.clamp(math.clamp(self.ValueMin / optionsettings.Max, 0, 1), 0.04, 0.96)
-			tween:Tween(fill, TweenInfo.new(0.1), {
-				Position = UDim2.fromScale(size, 0),
-				Size = UDim2.fromScale(math.clamp(math.clamp(math.clamp(self.ValueMax / optionsettings.Max, 0.04, 0.96), 0.04, 0.96) - size, 0, 1), 1)
-			})
-		end
-		
-		knobholder.MouseEnter:Connect(function()
-			tween:Tween(knob, uipallet.Tween, {
-				Size = UDim2.fromOffset(11, 18)
-			})
-		end)
-		knobholder.MouseLeave:Connect(function()
-			tween:Tween(knob, uipallet.Tween, {
-				Size = UDim2.fromOffset(9, 16)
-			})
-		end)
-		knobholdermax.MouseEnter:Connect(function()
-			tween:Tween(knobholdermax.Knob, uipallet.Tween, {
-				Size = UDim2.fromOffset(11, 18)
-			})
-		end)
-		knobholdermax.MouseLeave:Connect(function()
-			tween:Tween(knobholdermax.Knob, uipallet.Tween, {
-				Size = UDim2.fromOffset(9, 16)
-			})
-		end)
-		slider.InputBegan:Connect(function(inputObj)
-			if
-				(inputObj.UserInputType == Enum.UserInputType.MouseButton1 or inputObj.UserInputType == Enum.UserInputType.Touch)
-				and (inputObj.Position.Y - slider.AbsolutePosition.Y) > (20 * scale.Scale)
-			then
-				local maxCheck = (inputObj.Position.X - knobholdermax.AbsolutePosition.X) > -10
-				local newPosition = math.clamp((inputObj.Position.X - bkg.AbsolutePosition.X) / bkg.AbsoluteSize.X, 0, 1)
-				optionapi:SetValue(maxCheck, math.floor((optionsettings.Min + (optionsettings.Max - optionsettings.Min) * newPosition) * optionsettings.Decimal) / optionsettings.Decimal, newPosition)
-		
-				local changed = inputService.InputChanged:Connect(function(input)
-					if input.UserInputType == (inputObj.UserInputType == Enum.UserInputType.MouseButton1 and Enum.UserInputType.MouseMovement or Enum.UserInputType.Touch) then
-						local newPosition = math.clamp((input.Position.X - bkg.AbsolutePosition.X) / bkg.AbsoluteSize.X, 0, 1)
-						optionapi:SetValue(maxCheck, math.floor((optionsettings.Min + (optionsettings.Max - optionsettings.Min) * newPosition) * optionsettings.Decimal) / optionsettings.Decimal, newPosition)
-					end
-				end)
-		
-				local ended
-				ended = inputObj.Changed:Connect(function()
-					if inputObj.UserInputState == Enum.UserInputState.End then
-						if changed then
-							changed:Disconnect()
-						end
-						if ended then
-							ended:Disconnect()
-						end
-					end
-				end)
-			end
-		end)
-		valuebutton.MouseButton1Click:Connect(function()
-			valuebutton.Visible = false
-			valuebox.Visible = true
-			valuebox.Text = optionapi.ValueMax
-			valuebox:CaptureFocus()
-		end)
-		valuebutton2.MouseButton1Click:Connect(function()
-			valuebutton2.Visible = false
-			valuebox2.Visible = true
-			valuebox2.Text = optionapi.ValueMin
-			valuebox2:CaptureFocus()
-		end)
-		valuebox.FocusLost:Connect(function(enter)
-			valuebutton.Visible = true
-			valuebox.Visible = false
-			if enter and tonumber(valuebox.Text) then
-				optionapi:SetValue(true, tonumber(valuebox.Text))
-			end
-		end)
-		valuebox2.FocusLost:Connect(function(enter)
-			valuebutton2.Visible = true
-			valuebox2.Visible = false
-			if enter and tonumber(valuebox2.Text) then
-				optionapi:SetValue(false, tonumber(valuebox2.Text))
-			end
-		end)
-		
-		optionapi.Object = slider
-		api.Options[optionsettings.Name] = optionapi
-		
+		api.Options[settings.Name] = optionapi
+		addTooltip(button, settings.Tooltip)
+
 		return optionapi
 	end,
 	Divider = function(children, text)
 		local divider = Instance.new('Frame')
 		divider.Name = 'Divider'
-		divider.Size = UDim2.new(1, 0, 0, 1)
-		divider.BackgroundColor3 = color.Light(uipallet.Main, 0.02)
+		divider.Size = UDim2.fromOffset(478, 26)
+		divider.BackgroundTransparency = 1
 		divider.BorderSizePixel = 0
 		divider.Parent = children
-		if text then
-			local label = Instance.new('TextLabel')
-			label.Name = 'DividerLabel'
-			label.Size = UDim2.fromOffset(218, 27)
-			label.BackgroundTransparency = 1
-			label.Text = '          '..text:upper()
-			label.TextXAlignment = Enum.TextXAlignment.Left
-			label.TextColor3 = color.Dark(uipallet.Text, 0.43)
-			label.TextSize = 9
-			label.FontFace = uipallet.Font
-			label.Parent = children
-			divider.Position = UDim2.fromOffset(0, 26)
-			divider.Parent = label
-		end
-	end
-}
-
-mainapi.Components = setmetatable(components, {
-	__newindex = function(self, ind, func)
-		for _, v in mainapi.Modules do
-			rawset(v, 'Create'..ind, function(_, settings)
-				return func(settings, v.Children, v)
-			end)
-		end
-
-		if mainapi.Legit then
-			for _, v in mainapi.Legit.Modules do
-				rawset(v, 'Create'..ind, function(_, settings)
-					return func(settings, v.Children, v)
-				end)
-			end
-		end
-
-		rawset(self, ind, func)
-	end
-})
-
-task.spawn(function()
-	repeat
-		local hue = tick() * (0.2 * mainapi.RainbowSpeed.Value) % 1
-		for _, v in mainapi.RainbowTable do
-			if v.Type == 'GUISlider' then
-				v:SetValue(mainapi:Color(hue))
-			else
-				v:SetValue(hue)
-			end
-		end
-		task.wait(1 / mainapi.RainbowUpdateSpeed.Value)
-	until mainapi.Loaded == nil
-end)
-
-function mainapi:BlurCheck()
-	if self.ThreadFix then
-		setthreadidentity(8)
-		runService:SetRobloxGuiFocused((clickgui.Visible or guiService:GetErrorType() ~= Enum.ConnectionError.OK) and self.Blur.Enabled)
-	end
-end
-
-addMaid(mainapi)
-
-function mainapi:CreateGUI()
-	local categoryapi = {
-		Type = 'MainWindow',
-		Buttons = {},
-		Options = {}
-	}
-
-	local window = Instance.new('TextButton')
-	window.Name = 'GUICategory'
-	window.Position = UDim2.fromOffset(6, 60)
-	window.BackgroundColor3 = color.Dark(uipallet.Main, 0.02)
-	window.AutoButtonColor = false
-	window.Text = ''
-	window.Parent = clickgui
-	addBlur(window)
-	addCorner(window)
-	makeDraggable(window)
-	local logo = Instance.new('ImageLabel')
-	logo.Name = 'VapeLogo'
-	logo.Size = UDim2.fromOffset(62, 18)
-	logo.Position = UDim2.fromOffset(11, 10)
-	logo.BackgroundTransparency = 1
-	logo.Image = getcustomasset('skidv5/assets/new/guivape.png')
-	logo.ImageColor3 = select(3, uipallet.Main:ToHSV()) > 0.5 and uipallet.Text or Color3.new(1, 1, 1)
-	logo.Parent = window
-	local logov4 = Instance.new('ImageLabel')
-	logov4.Name = 'V4Logo'
-	logov4.Size = UDim2.fromOffset(28, 16)
-	logov4.Position = UDim2.new(1, 1, 0, 1)
-	logov4.BackgroundTransparency = 1
-	logov4.Image = getcustomasset('skidv5/assets/new/guiv4.png')
-	logov4.Parent = logo
-	local children = Instance.new('Frame')
-	children.Name = 'Children'
-	children.Size = UDim2.new(1, 0, 1, -33)
-	children.Position = UDim2.fromOffset(0, 37)
-	children.BackgroundTransparency = 1
-	children.Parent = window
-	local windowlist = Instance.new('UIListLayout')
-	windowlist.SortOrder = Enum.SortOrder.LayoutOrder
-	windowlist.HorizontalAlignment = Enum.HorizontalAlignment.Center
-	windowlist.Parent = children
-	local settingsbutton = Instance.new('TextButton')
-	settingsbutton.Name = 'Settings'
-	settingsbutton.Size = UDim2.fromOffset(40, 40)
-	settingsbutton.Position = UDim2.new(1, -40, 0, 0)
-	settingsbutton.BackgroundTransparency = 1
-	settingsbutton.Text = ''
-	settingsbutton.Parent = window
-	addTooltip(settingsbutton, 'Open settings')
-	local settingsicon = Instance.new('ImageLabel')
-	settingsicon.Size = UDim2.fromOffset(14, 14)
-	settingsicon.Position = UDim2.fromOffset(15, 12)
-	settingsicon.BackgroundTransparency = 1
-	settingsicon.Image = getcustomasset('skidv5/assets/new/guisettings.png')
-	settingsicon.ImageColor3 = color.Light(uipallet.Main, 0.37)
-	settingsicon.Parent = settingsbutton
-	local discordbutton = Instance.new('ImageButton')
-	discordbutton.Size = UDim2.fromOffset(16, 16)
-	discordbutton.Position = UDim2.new(1, -56, 0, 11)
-	discordbutton.BackgroundTransparency = 1
-	discordbutton.Image = getcustomasset('skidv5/assets/new/discord.png')
-	discordbutton.Parent = window
-	addTooltip(discordbutton, 'Join discord')
-	local settingspane = Instance.new('TextButton')
-	settingspane.Size = UDim2.fromScale(1, 1)
-	settingspane.BackgroundColor3 = color.Dark(uipallet.Main, 0.02)
-	settingspane.AutoButtonColor = false
-	settingspane.Visible = false
-	settingspane.Text = ''
-	settingspane.Parent = window
-	local title = Instance.new('TextLabel')
-	title.Name = 'Title'
-	title.Size = UDim2.new(1, -36, 0, 20)
-	title.Position = UDim2.fromOffset(math.abs(title.Size.X.Offset), 11)
-	title.BackgroundTransparency = 1
-	title.Text = 'Settings'
-	title.TextXAlignment = Enum.TextXAlignment.Left
-	title.TextColor3 = uipallet.Text
-	title.TextSize = 13
-	title.FontFace = uipallet.Font
-	title.Parent = settingspane
-	local close = addCloseButton(settingspane)
-	local back = Instance.new('ImageButton')
-	back.Name = 'Back'
-	back.Size = UDim2.fromOffset(16, 16)
-	back.Position = UDim2.fromOffset(11, 13)
-	back.BackgroundTransparency = 1
-	back.Image = getcustomasset('skidv5/assets/new/back.png')
-	back.ImageColor3 = color.Light(uipallet.Main, 0.37)
-	back.Parent = settingspane
-	local settingsversion = Instance.new('TextLabel')
-	settingsversion.Name = 'Version'
-	settingsversion.Size = UDim2.new(1, 0, 0, 16)
-	settingsversion.Position = UDim2.new(0, 0, 1, -16)
-	settingsversion.BackgroundTransparency = 1
-	settingsversion.Text = 'Vape '..mainapi.Version..' '..(
-		isfile('skidv5/profiles/version.txt') and readfile('skidv5/profiles/version.txt') or ''
-	)..' '
-	settingsversion.TextColor3 = color.Dark(uipallet.Text, 0.43)
-	settingsversion.TextXAlignment = Enum.TextXAlignment.Right
-	settingsversion.TextSize = 10
-	settingsversion.FontFace = uipallet.Font
-	settingsversion.Parent = settingspane
-	addCorner(settingspane)
-	local settingschildren = Instance.new('Frame')
-	settingschildren.Name = 'Children'
-	settingschildren.Size = UDim2.new(1, 0, 1, -57)
-	settingschildren.Position = UDim2.fromOffset(0, 41)
-	settingschildren.BackgroundColor3 = uipallet.Main
-	settingschildren.BorderSizePixel = 0
-	settingschildren.Parent = settingspane
-	local settingswindowlist = Instance.new('UIListLayout')
-	settingswindowlist.SortOrder = Enum.SortOrder.LayoutOrder
-	settingswindowlist.HorizontalAlignment = Enum.HorizontalAlignment.Center
-	settingswindowlist.Parent = settingschildren
-	categoryapi.Object = window
-
-	function categoryapi:CreateBind()
-		local optionapi = {Bind = {'RightShift'}}
-
-		local button = Instance.new('TextButton')
-		button.Size = UDim2.fromOffset(220, 40)
-		button.BackgroundColor3 = uipallet.Main
-		button.BorderSizePixel = 0
-		button.AutoButtonColor = false
-		button.Text = '          Rebind GUI'
-		button.TextXAlignment = Enum.TextXAlignment.Left
-		button.TextColor3 = color.Dark(uipallet.Text, 0.16)
-		button.TextSize = 14
-		button.FontFace = uipallet.Font
-		button.Parent = settingschildren
-		addTooltip(button, 'Change the bind of the GUI')
-		local bind = Instance.new('TextButton')
-		bind.Name = 'Bind'
-		bind.Size = UDim2.fromOffset(20, 21)
-		bind.Position = UDim2.new(1, -10, 0, 9)
-		bind.AnchorPoint = Vector2.new(1, 0)
-		bind.BackgroundColor3 = Color3.new(1, 1, 1)
-		bind.BackgroundTransparency = 0.92
-		bind.BorderSizePixel = 0
-		bind.AutoButtonColor = false
-		bind.Text = ''
-		bind.Parent = button
-		addTooltip(bind, 'Click to bind')
-		addCorner(bind, UDim.new(0, 4))
-		local icon = Instance.new('ImageLabel')
-		icon.Name = 'Icon'
-		icon.Size = UDim2.fromOffset(12, 12)
-		icon.Position = UDim2.new(0.5, -6, 0, 5)
-		icon.BackgroundTransparency = 1
-		icon.Image = getcustomasset('skidv5/assets/new/bind.png')
-		icon.ImageColor3 = color.Dark(uipallet.Text, 0.43)
-		icon.Parent = bind
+		local left = Instance.new('Frame')
+		left.Size = UDim2.new(0.5, -70, 0, 1)
+		left.Position = UDim2.fromOffset(10, 13)
+		left.BackgroundColor3 = Color3.new(1, 1, 1)
+		left.BackgroundTransparency = 0.93
+		left.BorderSizePixel = 0
+		left.Parent = divider
 		local label = Instance.new('TextLabel')
-		label.Name = 'Text'
-		label.Size = UDim2.fromScale(1, 1)
-		label.Position = UDim2.fromOffset(0, 1)
+		label.Size = UDim2.fromOffset(120, 26)
+		label.Position = UDim2.fromScale(0.5, 0)
+		label.AnchorPoint = Vector2.new(0.5, 0)
 		label.BackgroundTransparency = 1
-		label.Visible = false
-		label.Text = ''
+		label.Text = text or ''
 		label.TextColor3 = color.Dark(uipallet.Text, 0.43)
-		label.TextSize = 12
-		label.FontFace = uipallet.Font
-		label.Parent = bind
-
-		function optionapi:SetBind(tab)
-			-- `#tab` errors outright on a nil, and this is reached with one whenever the
-			-- saved GUI state has no Keybind in it (see Load). That error lands after the
-			-- menu is built but before any bind is registered, so the GUI exists with no key
-			-- that opens it -- the script looks like it loaded fine and simply has no menu.
-			if type(tab) ~= 'table' then tab = mainapi.Keybind end
-			mainapi.Keybind = #tab <= 0 and mainapi.Keybind or table.clone(tab)
-			self.Bind = mainapi.Keybind
-			if mainapi.VapeButton then
-				mainapi.VapeButton:Destroy()
-				mainapi.VapeButton = nil
-				mainapi.VapeButtonImage = nil
-			end
-
-			bind.Visible = true
-			label.Visible = true
-			icon.Visible = false
-			label.Text = table.concat(mainapi.Keybind, ' + '):upper()
-			bind.Size = UDim2.fromOffset(math.max(getfontsize(label.Text, label.TextSize, label.Font).X + 10, 20), 21)
-		end
-
-		bind.MouseEnter:Connect(function()
-			label.Visible = false
-			icon.Visible = not label.Visible
-			icon.Image = getcustomasset('skidv5/assets/new/edit.png')
-			icon.ImageColor3 = color.Dark(uipallet.Text, 0.16)
-		end)
-		bind.MouseLeave:Connect(function()
-			label.Visible = true
-			icon.Visible = not label.Visible
-			icon.Image = getcustomasset('skidv5/assets/new/bind.png')
-			icon.ImageColor3 = color.Dark(uipallet.Text, 0.43)
-		end)
-		bind.MouseButton1Click:Connect(function()
-			mainapi.Binding = optionapi
-		end)
-
-		categoryapi.Options.Bind = optionapi
-
-		return optionapi
-	end
-
-	function categoryapi:CreateButton(categorysettings)
+		label.TextSize = 10
+		label.FontFace = uipallet.FontSemiBold
+		label.Parent = divider
+		local right = left:Clone()
+		right.Position = UDim2.new(0.5, 70, 0, 13)
+		right.Parent = divider
+	end,
+	AddOption = function(children, settings, api)
 		local optionapi = {
-			Enabled = false,
-			Index = getTableSize(categoryapi.Buttons)
+			Type = 'AddOption',
+			Index = getTableSize(api.Options)
 		}
-
-		local button = Instance.new('TextButton')
-		button.Name = categorysettings.Name
-		button.Size = UDim2.fromOffset(220, 40)
-		button.BackgroundColor3 = uipallet.Main
-		button.BorderSizePixel = 0
-		button.AutoButtonColor = false
-		button.Text = (categorysettings.Icon and '                                 ' or '             ')..categorysettings.Name
-		button.TextXAlignment = Enum.TextXAlignment.Left
-		button.TextColor3 = color.Dark(uipallet.Text, 0.16)
-		button.TextSize = 14
-		button.FontFace = uipallet.Font
-		button.Parent = children
-		local icon
-		if categorysettings.Icon then
-			icon = Instance.new('ImageLabel')
-			icon.Name = 'Icon'
-			icon.Size = categorysettings.Size
-			icon.Position = UDim2.fromOffset(13, 13)
-			icon.BackgroundTransparency = 1
-			icon.Image = categorysettings.Icon
-			icon.ImageColor3 = color.Dark(uipallet.Text, 0.16)
-			icon.Parent = button
-		end
-		if categorysettings.Name == 'Profiles' then
-			local label = Instance.new('TextLabel')
-			label.Name = 'ProfileLabel'
-			label.Size = UDim2.fromOffset(53, 24)
-			label.Position = UDim2.new(1, -36, 0, 8)
-			label.AnchorPoint = Vector2.new(1, 0)
-			label.BackgroundColor3 = color.Light(uipallet.Main, 0.04)
-			label.Text = 'default'
-			label.TextColor3 = color.Dark(uipallet.Text, 0.29)
-			label.TextSize = 12
-			label.FontFace = uipallet.Font
-			label.Parent = button
-			addCorner(label)
-			mainapi.ProfileLabel = label
-		end
-		local arrow = Instance.new('ImageLabel')
-		arrow.Name = 'Arrow'
-		arrow.Size = UDim2.fromOffset(4, 8)
-		arrow.Position = UDim2.new(1, -20, 0, 16)
-		arrow.BackgroundTransparency = 1
-		arrow.Image = getcustomasset('skidv5/assets/new/expandright.png')
-		arrow.ImageColor3 = color.Light(uipallet.Main, 0.37)
-		arrow.Parent = button
-		optionapi.Name = categorysettings.Name
-		optionapi.Icon = icon
-		optionapi.Object = button
-
-		function optionapi:Toggle()
-			self.Enabled = not self.Enabled
-			tween:Tween(arrow, uipallet.Tween, {
-				Position = UDim2.new(1, self.Enabled and -14 or -20, 0, 16)
-			})
-			button.TextColor3 = self.Enabled and Color3.fromHSV(mainapi.GUIColor.Hue, mainapi.GUIColor.Sat, mainapi.GUIColor.Value) or uipallet.Text
-			if icon then
-				icon.ImageColor3 = button.TextColor3
-			end
-			button.BackgroundColor3 = color.Light(uipallet.Main, 0.02)
-			categorysettings.Window.Visible = self.Enabled
-		end
-
-		button.MouseEnter:Connect(function()
-			if not optionapi.Enabled then
-				button.TextColor3 = uipallet.Text
-				if buttonicon then buttonicon.ImageColor3 = uipallet.Text end
-				button.BackgroundColor3 = color.Light(uipallet.Main, 0.02)
-			end
-		end)
-		button.MouseLeave:Connect(function()
-			if not optionapi.Enabled then
-				button.TextColor3 = color.Dark(uipallet.Text, 0.16)
-				if buttonicon then buttonicon.ImageColor3 = color.Dark(uipallet.Text, 0.16) end
-				button.BackgroundColor3 = uipallet.Main
-			end
-		end)
-		button.MouseButton1Click:Connect(function()
-			optionapi:Toggle()
-		end)
-
-		categoryapi.Buttons[categorysettings.Name] = optionapi
+		local row = Instance.new('Frame')
+		row.Name = settings.Name
+		row.Size = UDim2.fromOffset(478, 40)
+		row.BackgroundColor3 = color.Light(uipallet.Main, 0.02)
+		row.BorderSizePixel = 0
+		row.Parent = children
+		addCorner(row, UDim.new(0, 4))
+		local name = Instance.new('TextLabel')
+		name.Size = UDim2.fromOffset(478, 40)
+		name.BackgroundTransparency = 1
+		name.Text = settings.Name
+		name.TextXAlignment = Enum.TextXAlignment.Center
+		name.TextColor3 = color.Dark(uipallet.Text, 0.16)
+		name.TextSize = 14
+		name.FontFace = uipallet.Font
+		name.Parent = row
+		optionapi.Object = row
+		api.Options[settings.Name] = optionapi
 
 		return optionapi
-	end
-
-	function categoryapi:CreateDivider(text)
-		return components.Divider(children, text)
-	end
-
-	function categoryapi:CreateOverlayBar()
-		local optionapi = {Toggles = {}}
-
-		local bar = Instance.new('Frame')
-		bar.Name = 'Overlays'
-		bar.Size = UDim2.fromOffset(220, 36)
-		bar.BackgroundColor3 = uipallet.Main
-		bar.BorderSizePixel = 0
-		bar.Parent = children
-		components.Divider(bar)
-		local button = Instance.new('ImageButton')
-		button.Size = UDim2.fromOffset(24, 24)
-		button.Position = UDim2.new(1, -29, 0, 7)
-		button.BackgroundTransparency = 1
-		button.AutoButtonColor = false
-		button.Image = getcustomasset('skidv5/assets/new/overlaysicon.png')
-		button.ImageColor3 = color.Light(uipallet.Main, 0.37)
-		button.Parent = bar
-		addCorner(button, UDim.new(1, 0))
-		addTooltip(button, 'Open overlays menu')
-		local shadow = Instance.new('TextButton')
-		shadow.Name = 'Shadow'
-		shadow.Size = UDim2.new(1, 0, 1, -5)
-		shadow.BackgroundColor3 = Color3.new()
-		shadow.BackgroundTransparency = 1
-		shadow.AutoButtonColor = false
-		shadow.ClipsDescendants = true
-		shadow.Visible = false
-		shadow.Text = ''
-		shadow.Parent = window
-		addCorner(shadow)
-		local window = Instance.new('Frame')
-		window.Size = UDim2.fromOffset(220, 42)
-		window.Position = UDim2.fromScale(0, 1)
-		window.BackgroundColor3 = uipallet.Main
-		window.Parent = shadow
-		addCorner(window)
-		local icon = Instance.new('ImageLabel')
-		icon.Name = 'Icon'
-		icon.Size = UDim2.fromOffset(14, 12)
-		icon.Position = UDim2.fromOffset(10, 13)
-		icon.BackgroundTransparency = 1
-		icon.Image = getcustomasset('skidv5/assets/new/overlaystab.png')
-		icon.ImageColor3 = uipallet.Text
-		icon.Parent = window
-		local title = Instance.new('TextLabel')
-		title.Name = 'Title'
-		title.Size = UDim2.new(1, -36, 0, 38)
-		title.Position = UDim2.fromOffset(36, 0)
-		title.BackgroundTransparency = 1
-		title.Text = 'Overlays'
-		title.TextXAlignment = Enum.TextXAlignment.Left
-		title.TextColor3 = uipallet.Text
-		title.TextSize = 15
-		title.FontFace = uipallet.Font
-		title.Parent = window
-		local close = addCloseButton(window, 7)
-		local divider = Instance.new('Frame')
-		divider.Name = 'Divider'
-		divider.Size = UDim2.new(1, 0, 0, 1)
-		divider.Position = UDim2.fromOffset(0, 37)
-		divider.BackgroundColor3 = color.Light(uipallet.Main, 0.02)
-		divider.BorderSizePixel = 0
-		divider.Parent = window
-		local childrentoggle = Instance.new('Frame')
-		childrentoggle.Position = UDim2.fromOffset(0, 38)
-		childrentoggle.BackgroundTransparency = 1
-		childrentoggle.Parent = window
-		local windowlist = Instance.new('UIListLayout')
-		windowlist.SortOrder = Enum.SortOrder.LayoutOrder
-		windowlist.HorizontalAlignment = Enum.HorizontalAlignment.Center
-		windowlist.Parent = childrentoggle
-
-		function optionapi:CreateToggle(togglesettings)
-			local toggleapi = {
-				Enabled = false,
-				Index = getTableSize(optionapi.Toggles)
-			}
-
-			local hovered = false
-			local toggle = Instance.new('TextButton')
-			toggle.Name = togglesettings.Name..'Toggle'
-			toggle.Size = UDim2.new(1, 0, 0, 40)
-			toggle.BackgroundTransparency = 1
-			toggle.AutoButtonColor = false
-			toggle.Text = string.rep(' ', 33 * scale.Scale)..togglesettings.Name
-			toggle.TextXAlignment = Enum.TextXAlignment.Left
-			toggle.TextColor3 = color.Dark(uipallet.Text, 0.16)
-			toggle.TextSize = 14
-			toggle.FontFace = uipallet.Font
-			toggle.Parent = childrentoggle
-			local icon = Instance.new('ImageLabel')
-			icon.Name = 'Icon'
-			icon.Size = togglesettings.Size
-			icon.Position = togglesettings.Position
-			icon.BackgroundTransparency = 1
-			icon.Image = togglesettings.Icon
-			icon.ImageColor3 = uipallet.Text
-			icon.Parent = toggle
-			local knob = Instance.new('Frame')
-			knob.Name = 'Knob'
-			knob.Size = UDim2.fromOffset(22, 12)
-			knob.Position = UDim2.new(1, -30, 0, 14)
-			knob.BackgroundColor3 = color.Light(uipallet.Main, 0.14)
-			knob.Parent = toggle
-			addCorner(knob, UDim.new(1, 0))
-			local knobmain = knob:Clone()
-			knobmain.Size = UDim2.fromOffset(8, 8)
-			knobmain.Position = UDim2.fromOffset(2, 2)
-			knobmain.BackgroundColor3 = uipallet.Main
-			knobmain.Parent = knob
-			toggleapi.Object = toggle
-
-			function toggleapi:Toggle()
-				self.Enabled = not self.Enabled
-				tween:Tween(knob, uipallet.Tween, {
-					BackgroundColor3 = self.Enabled and Color3.fromHSV(
-						mainapi.GUIColor.Hue,
-						mainapi.GUIColor.Sat,
-						mainapi.GUIColor.Value
-					) or (hovered and color.Light(uipallet.Main, 0.37) or color.Light(uipallet.Main, 0.14))
-				})
-				tween:Tween(knobmain, uipallet.Tween, {
-					Position = UDim2.fromOffset(self.Enabled and 12 or 2, 2)
-				})
-				togglesettings.Function(self.Enabled)
-			end
-
-			scale:GetPropertyChangedSignal('Scale'):Connect(function()
-				toggle.Text = string.rep(' ', 33 * scale.Scale)..togglesettings.Name
-			end)
-			toggle.MouseEnter:Connect(function()
-				hovered = true
-				if not toggleapi.Enabled then
-					tween:Tween(knob, uipallet.Tween, {
-						BackgroundColor3 = color.Light(uipallet.Main, 0.37)
-					})
-				end
-			end)
-			toggle.MouseLeave:Connect(function()
-				hovered = false
-				if not toggleapi.Enabled then
-					tween:Tween(knob, uipallet.Tween, {
-						BackgroundColor3 = color.Light(uipallet.Main, 0.14)
-					})
-				end
-			end)
-			toggle.MouseButton1Click:Connect(function()
-				toggleapi:Toggle()
-			end)
-
-			table.insert(optionapi.Toggles, toggleapi)
-
-			return toggleapi
-		end
-
-		button.MouseEnter:Connect(function()
-			button.ImageColor3 = uipallet.Text
-			tween:Tween(button, uipallet.Tween, {
-				BackgroundTransparency = 0.9
-			})
-		end)
-		button.MouseLeave:Connect(function()
-			button.ImageColor3 = color.Light(uipallet.Main, 0.37)
-			tween:Tween(button, uipallet.Tween, {
-				BackgroundTransparency = 1
-			})
-		end)
-		button.MouseButton1Click:Connect(function()
-			shadow.Visible = true
-			tween:Tween(shadow, uipallet.Tween, {
-				BackgroundTransparency = 0.5
-			})
-			tween:Tween(window, uipallet.Tween, {
-				Position = UDim2.new(0, 0, 1, -(window.Size.Y.Offset))
-			})
-		end)
-		close.MouseButton1Click:Connect(function()
-			tween:Tween(shadow, uipallet.Tween, {
-				BackgroundTransparency = 1
-			})
-			tween:Tween(window, uipallet.Tween, {
-				Position = UDim2.fromScale(0, 1)
-			})
-			task.wait(0.2)
-			shadow.Visible = false
-		end)
-		shadow.MouseButton1Click:Connect(function()
-			tween:Tween(shadow, uipallet.Tween, {
-				BackgroundTransparency = 1
-			})
-			tween:Tween(window, uipallet.Tween, {
-				Position = UDim2.fromScale(0, 1)
-			})
-			task.wait(0.2)
-			shadow.Visible = false
-		end)
-		windowlist:GetPropertyChangedSignal('AbsoluteContentSize'):Connect(function()
-			if mainapi.ThreadFix then
-				setthreadidentity(8)
-			end
-			window.Size = UDim2.fromOffset(220, math.min(37 + windowlist.AbsoluteContentSize.Y / scale.Scale, 605))
-			childrentoggle.Size = UDim2.fromOffset(220, window.Size.Y.Offset - 5)
-		end)
-
-		mainapi.Overlays = optionapi
-
-		return optionapi
-	end
-
-	function categoryapi:CreateSettingsDivider()
-		components.Divider(settingschildren)
-	end
-
-	function categoryapi:CreateSettingsPane(categorysettings)
-		local optionapi = {}
-
-		local button = Instance.new('TextButton')
-		button.Name = categorysettings.Name
-		button.Size = UDim2.fromOffset(220, 40)
-		button.BackgroundColor3 = uipallet.Main
-		button.BorderSizePixel = 0
-		button.AutoButtonColor = false
-		button.Text = '          '..categorysettings.Name
-		button.TextXAlignment = Enum.TextXAlignment.Left
-		button.TextColor3 = color.Dark(uipallet.Text, 0.16)
-		button.TextSize = 14
-		button.FontFace = uipallet.Font
-		button.Parent = settingschildren
-		local arrow = Instance.new('ImageLabel')
-		arrow.Name = 'Arrow'
-		arrow.Size = UDim2.fromOffset(4, 8)
-		arrow.Position = UDim2.new(1, -20, 0, 16)
-		arrow.BackgroundTransparency = 1
-		arrow.Image = getcustomasset('skidv5/assets/new/expandright.png')
-		arrow.ImageColor3 = color.Light(uipallet.Main, 0.37)
-		arrow.Parent = button
-		local settingspane = Instance.new('TextButton')
-		settingspane.Size = UDim2.fromScale(1, 1)
-		settingspane.BackgroundColor3 = uipallet.Main
-		settingspane.AutoButtonColor = false
-		settingspane.Visible = false
-		settingspane.Text = ''
-		settingspane.Parent = window
-		local title = Instance.new('TextLabel')
-		title.Name = 'Title'
-		title.Size = UDim2.new(1, -36, 0, 20)
-		title.Position = UDim2.fromOffset(math.abs(title.Size.X.Offset), 11)
-		title.BackgroundTransparency = 1
-		title.Text = categorysettings.Name
-		title.TextXAlignment = Enum.TextXAlignment.Left
-		title.TextColor3 = uipallet.Text
-		title.TextSize = 13
-		title.FontFace = uipallet.Font
-		title.Parent = settingspane
-		local close = addCloseButton(settingspane)
-		local back = Instance.new('ImageButton')
-		back.Name = 'Back'
-		back.Size = UDim2.fromOffset(16, 16)
-		back.Position = UDim2.fromOffset(11, 13)
-		back.BackgroundTransparency = 1
-		back.Image = getcustomasset('skidv5/assets/new/back.png')
-		back.ImageColor3 = color.Light(uipallet.Main, 0.37)
-		back.Parent = settingspane
-		addCorner(settingspane)
-		local settingschildren = Instance.new('Frame')
-		settingschildren.Name = 'Children'
-		settingschildren.Size = UDim2.new(1, 0, 1, -57)
-		settingschildren.Position = UDim2.fromOffset(0, 41)
-		settingschildren.BackgroundColor3 = uipallet.Main
-		settingschildren.BorderSizePixel = 0
-		settingschildren.Parent = settingspane
-		local divider = Instance.new('Frame')
-		divider.Name = 'Divider'
-		divider.Size = UDim2.new(1, 0, 0, 1)
-		divider.BackgroundColor3 = Color3.new(1, 1, 1)
-		divider.BackgroundTransparency = 0.928
-		divider.BorderSizePixel = 0
-		divider.Parent = settingschildren
-		local settingswindowlist = Instance.new('UIListLayout')
-		settingswindowlist.SortOrder = Enum.SortOrder.LayoutOrder
-		settingswindowlist.HorizontalAlignment = Enum.HorizontalAlignment.Center
-		settingswindowlist.Parent = settingschildren
-
-		for i, v in components do
-			optionapi['Create'..i] = function(_, settings)
-				return v(settings, settingschildren, categoryapi)
-			end
-		end
-
-		back.MouseEnter:Connect(function()
-			back.ImageColor3 = uipallet.Text
-		end)
-		back.MouseLeave:Connect(function()
-			back.ImageColor3 = color.Light(uipallet.Main, 0.37)
-		end)
-		back.MouseButton1Click:Connect(function()
-			settingspane.Visible = false
-		end)
-		button.MouseEnter:Connect(function()
-			button.TextColor3 = uipallet.Text
-			button.BackgroundColor3 = color.Light(uipallet.Main, 0.02)
-		end)
-		button.MouseLeave:Connect(function()
-			button.TextColor3 = color.Dark(uipallet.Text, 0.16)
-			button.BackgroundColor3 = uipallet.Main
-		end)
-		button.MouseButton1Click:Connect(function()
-			settingspane.Visible = true
-		end)
-		close.MouseButton1Click:Connect(function()
-			settingspane.Visible = false
-		end)
-		windowlist:GetPropertyChangedSignal('AbsoluteContentSize'):Connect(function()
-			if mainapi.ThreadFix then
-				setthreadidentity(8)
-			end
-			window.Size = UDim2.fromOffset(220, 45 + windowlist.AbsoluteContentSize.Y / scale.Scale)
-			for _, v in categoryapi.Buttons do
-				if v.Icon then
-					v.Object.Text = string.rep(' ', 33 * scale.Scale)..v.Name
-				end
-			end
-		end)
-
-		return optionapi
-	end
-
-	function categoryapi:CreateGUISlider(optionsettings)
+	end,
+	AddList = function(children, settings, api)
 		local optionapi = {
-			Type = 'GUISlider',
-			Notch = 4,
-			Hue = 0.46,
-			Sat = 0.96,
-			Value = 0.52,
-			Rainbow = false,
-			CustomColor = false
+			Type = 'AddList',
+			List = {},
+			ListEnabled = {},
+			Index = getTableSize(api.Options)
 		}
-		local slidercolors = {
-			Color3.fromRGB(250, 50, 56),
-			Color3.fromRGB(242, 99, 33),
-			Color3.fromRGB(252, 179, 22),
-			Color3.fromRGB(5, 133, 104),
-			Color3.fromRGB(47, 122, 229),
-			Color3.fromRGB(126, 84, 217),
-			Color3.fromRGB(232, 96, 152)
-		}
-		local slidercolorpos = {
-			4,
-			33,
-			62,
-			90,
-			119,
-			148,
-			177
-		}
+		local row = Instance.new('TextButton')
+		row.Name = settings.Name
+		row.Size = UDim2.fromOffset(478, 40)
+		row.BackgroundColor3 = settings.Darker and color.Dark(uipallet.Main, 0.02) or uipallet.Main
+		row.BorderSizePixel = 0
+		row.AutoButtonColor = false
+		row.Text = ''
+		row.Parent = children
+		addCorner(row, UDim.new(0, 4))
+		local name = Instance.new('TextLabel')
+		name.Size = UDim2.fromOffset(250, 40)
+		name.Position = UDim2.fromOffset(10, 0)
+		name.BackgroundTransparency = 1
+		name.Text = settings.Name
+		name.TextXAlignment = Enum.TextXAlignment.Left
+		name.TextColor3 = color.Dark(uipallet.Text, 0.16)
+		name.TextSize = 14
+		name.FontFace = uipallet.Font
+		name.Parent = row
+		local count = Instance.new('TextLabel')
+		count.Size = UDim2.fromOffset(120, 40)
+		count.Position = UDim2.new(1, -34, 0, 0)
+		count.AnchorPoint = Vector2.new(1, 0)
+		count.BackgroundTransparency = 1
+		count.Text = '0'
+		count.TextXAlignment = Enum.TextXAlignment.Right
+		count.TextColor3 = color.Dark(uipallet.Text, 0.43)
+		count.TextSize = 12
+		count.FontFace = uipallet.Font
+		count.Parent = row
+		local arrow = Instance.new('TextLabel')
+		arrow.Size = UDim2.fromOffset(14, 40)
+		arrow.Position = UDim2.new(1, -20, 0, 0)
+		arrow.BackgroundTransparency = 1
+		arrow.Text = '▼'
+		arrow.TextColor3 = color.Light(uipallet.Main, 0.37)
+		arrow.TextSize = 9
+		arrow.FontFace = uipallet.Font
+		arrow.Parent = row
+		local expanded = Instance.new('Frame')
+		expanded.Name = 'Expanded'
+		expanded.Size = UDim2.fromOffset(478, 0)
+		expanded.BackgroundColor3 = color.Dark(uipallet.Main, 0.02)
+		expanded.BorderSizePixel = 0
+		expanded.Visible = false
+		expanded.Parent = children
+		addCorner(expanded, UDim.new(0, 4))
+		settings.Function = settings.Function or function() end
+		optionapi.Object = row
 
-		local function createSlider(name, gradientColor)
-			local slider = Instance.new('TextButton')
-			slider.Name = optionsettings.Name..'Slider'..name
-			slider.Size = UDim2.fromOffset(220, 50)
-			slider.BackgroundColor3 = color.Dark(uipallet.Main, 0.02)
-			slider.BorderSizePixel = 0
-			slider.AutoButtonColor = false
-			slider.Visible = false
-			slider.Text = ''
-			slider.Parent = settingschildren
-			local title = Instance.new('TextLabel')
-			title.Name = 'Title'
-			title.Size = UDim2.fromOffset(60, 30)
-			title.Position = UDim2.fromOffset(10, 2)
-			title.BackgroundTransparency = 1
-			title.Text = name
-			title.TextXAlignment = Enum.TextXAlignment.Left
-			title.TextColor3 = color.Dark(uipallet.Text, 0.16)
-			title.TextSize = 11
-			title.FontFace = uipallet.Font
-			title.Parent = slider
-			local holder = Instance.new('Frame')
-			holder.Name = 'Slider'
-			holder.Size = UDim2.fromOffset(200, 2)
-			holder.Position = UDim2.fromOffset(10, 37)
-			holder.BackgroundColor3 = Color3.new(1, 1, 1)
-			holder.BorderSizePixel = 0
-			holder.Parent = slider
-			local uigradient = Instance.new('UIGradient')
-			uigradient.Color = gradientColor
-			uigradient.Parent = holder
-			local fill = holder:Clone()
-			fill.Name = 'Fill'
-			fill.Size = UDim2.fromScale(math.clamp(1, 0.04, 0.96), 1)
-			fill.Position = UDim2.new()
-			fill.BackgroundTransparency = 1
-			fill.Parent = holder
-			local knobframe = Instance.new('Frame')
-			knobframe.Name = 'Knob'
-			knobframe.Size = UDim2.fromOffset(24, 4)
-			knobframe.Position = UDim2.fromScale(1, 0.5)
-			knobframe.AnchorPoint = Vector2.new(0.5, 0.5)
-			knobframe.BackgroundColor3 = color.Dark(uipallet.Main, 0.02)
-			knobframe.BorderSizePixel = 0
-			knobframe.Parent = fill
-			local knob = Instance.new('Frame')
-			knob.Name = 'Knob'
-			knob.Size = UDim2.fromOffset(14, 14)
-			knob.Position = UDim2.fromScale(0.5, 0.5)
-			knob.AnchorPoint = Vector2.new(0.5, 0.5)
-			knob.BackgroundColor3 = uipallet.Text
-			knob.Parent = knobframe
-			addCorner(knob, UDim.new(1, 0))
-			if name == 'Custom color' then
-				local reset = Instance.new('TextButton')
-				reset.Size = UDim2.fromOffset(45, 20)
-				reset.Position = UDim2.new(1, -52, 0, 5)
-				reset.BackgroundTransparency = 1
-				reset.Text = 'RESET'
-				reset.TextColor3 = color.Dark(uipallet.Text, 0.16)
-				reset.TextSize = 11
-				reset.FontFace = uipallet.Font
-				reset.Parent = slider
-				reset.MouseButton1Click:Connect(function()
-					optionapi:SetValue(nil, nil, nil, 4)
+		local function rebuild()
+			for _, v in expanded:GetChildren() do
+				if v:IsA('TextButton') or v:IsA('Frame') then
+					v:Destroy()
+				end
+			end
+			for i, v in optionapi.List do
+				local item = Instance.new('TextButton')
+				item.Name = 'Item'
+				item.Size = UDim2.fromOffset(458, 30)
+				item.Position = UDim2.fromOffset(10, 0)
+				item.BackgroundColor3 = color.Light(uipallet.Main, 0.02)
+				item.AutoButtonColor = false
+				item.Text = ''
+				item.LayoutOrder = i
+				item.Parent = expanded
+				addCorner(item, UDim.new(0, 4))
+				local itemname = Instance.new('TextLabel')
+				itemname.Size = UDim2.fromOffset(400, 30)
+				itemname.Position = UDim2.fromOffset(10, 0)
+				itemname.BackgroundTransparency = 1
+				itemname.Text = v
+				itemname.TextXAlignment = Enum.TextXAlignment.Left
+				itemname.TextColor3 = color.Dark(uipallet.Text, 0.16)
+				itemname.TextSize = 13
+				itemname.FontFace = uipallet.Font
+				itemname.Parent = item
+				local dot = Instance.new('Frame')
+				dot.Name = 'Dot'
+				dot.Size = UDim2.fromOffset(8, 8)
+				dot.Position = UDim2.new(1, -20, 0.5, 0)
+				dot.AnchorPoint = Vector2.new(1, 0.5)
+				dot.BackgroundColor3 = table.find(optionapi.ListEnabled, v) and Color3.fromHSV(mainapi.GUIColor.Hue, mainapi.GUIColor.Sat, mainapi.GUIColor.Value) or color.Light(uipallet.Main, 0.37)
+				dot.BorderSizePixel = 0
+				dot.Parent = item
+				addCorner(dot, UDim.new(1, 0))
+				item.MouseButton1Click:Connect(function()
+					optionapi:ChangeValue(v)
 				end)
 			end
+			count.Text = tostring(#optionapi.List)
+		end
 
-			slider.InputBegan:Connect(function(inputObj)
-				if
-					(inputObj.UserInputType == Enum.UserInputType.MouseButton1 or inputObj.UserInputType == Enum.UserInputType.Touch)
-					and (inputObj.Position.Y - slider.AbsolutePosition.Y) > (20 * scale.Scale)
-				then
-					local changed = inputService.InputChanged:Connect(function(input)
-						if input.UserInputType == (inputObj.UserInputType == Enum.UserInputType.MouseButton1 and Enum.UserInputType.MouseMovement or Enum.UserInputType.Touch) then
-							local value = math.clamp((input.Position.X - holder.AbsolutePosition.X) / holder.AbsoluteSize.X, 0, 1)
-							optionapi:SetValue(
-								name == 'Custom color' and value or nil,
-								name == 'Saturation' and value or nil,
-								name == 'Vibrance' and value or nil,
-								name == 'Opacity' and value or nil
-							)
-						end
-					end)
-
-					local ended
-					ended = inputObj.Changed:Connect(function()
-						if inputObj.UserInputState == Enum.UserInputState.End then
-							if changed then
-								changed:Disconnect()
-							end
-							if ended then
-								ended:Disconnect()
-							end
-						end
-					end)
+		function optionapi:ChangeValue(val)
+			if val then
+				local ind = table.find(self.List, val)
+				if ind then
+					table.remove(self.List, ind)
+					ind = table.find(self.ListEnabled, val)
+					if ind then
+						table.remove(self.ListEnabled, ind)
+					end
+				else
+					table.insert(self.List, val)
+					table.insert(self.ListEnabled, val)
 				end
-			end)
-			slider.MouseEnter:Connect(function()
-				tween:Tween(knob, uipallet.Tween, {
-					Size = UDim2.fromOffset(16, 16)
-				})
-			end)
-			slider.MouseLeave:Connect(function()
-				tween:Tween(knob, uipallet.Tween, {
-					Size = UDim2.fromOffset(14, 14)
-				})
-			end)
-
-			return slider
+			end
+			rebuild()
+			settings.Function(self.List)
 		end
 
-		local slider = Instance.new('TextButton')
-		slider.Name = optionsettings.Name..'Slider'
-		slider.Size = UDim2.fromOffset(220, 50)
-		slider.BackgroundTransparency = 1
-		slider.AutoButtonColor = false
-		slider.Text = ''
-		slider.Parent = settingschildren
-		local title = Instance.new('TextLabel')
-		title.Name = 'Title'
-		title.Size = UDim2.fromOffset(60, 30)
-		title.Position = UDim2.fromOffset(10, 2)
-		title.BackgroundTransparency = 1
-		title.Text = optionsettings.Name
-		title.TextXAlignment = Enum.TextXAlignment.Left
-		title.TextColor3 = color.Dark(uipallet.Text, 0.16)
-		title.TextSize = 11
-		title.FontFace = uipallet.Font
-		title.Parent = slider
-		local holder = Instance.new('Frame')
-		holder.Name = 'Slider'
-		holder.Size = UDim2.fromOffset(200, 2)
-		holder.Position = UDim2.fromOffset(10, 37)
-		holder.BackgroundTransparency = 1
-		holder.BorderSizePixel = 0
-		holder.Parent = slider
-		local colornum = 0
-		for i, color in slidercolors do
-			local colorframe = Instance.new('Frame')
-			colorframe.Size = UDim2.fromOffset(27 + (((i + 1) % 2) == 0 and 1 or 0), 2)
-			colorframe.Position = UDim2.fromOffset(colornum, 0)
-			colorframe.BackgroundColor3 = color
-			colorframe.BorderSizePixel = 0
-			colorframe.Parent = holder
-			colornum += (colorframe.Size.X.Offset + 1)
-		end
-		local preview = Instance.new('ImageButton')
-		preview.Name = 'Preview'
-		preview.Size = UDim2.fromOffset(12, 12)
-		preview.Position = UDim2.new(1, -22, 0, 10)
-		preview.BackgroundTransparency = 1
-		preview.Image = getcustomasset('skidv5/assets/new/colorpreview.png')
-		preview.ImageColor3 = Color3.fromHSV(optionapi.Hue, 1, 1)
-		preview.Parent = slider
-		local valuebox = Instance.new('TextBox')
-		valuebox.Name = 'Box'
-		valuebox.Size = UDim2.fromOffset(60, 15)
-		valuebox.Position = UDim2.new(1, -69, 0, 9)
-		valuebox.BackgroundTransparency = 1
-		valuebox.Visible = false
-		valuebox.Text = ''
-		valuebox.TextXAlignment = Enum.TextXAlignment.Right
-		valuebox.TextColor3 = color.Dark(uipallet.Text, 0.16)
-		valuebox.TextSize = 11
-		valuebox.FontFace = uipallet.Font
-		valuebox.ClearTextOnFocus = true
-		valuebox.Parent = slider
-		local expandbutton = Instance.new('TextButton')
-		expandbutton.Name = 'Expand'
-		expandbutton.Size = UDim2.fromOffset(17, 13)
-		expandbutton.Position = UDim2.new(0, getfontsize(title.Text, title.TextSize, title.Font).X + 11, 0, 7)
-		expandbutton.BackgroundTransparency = 1
-		expandbutton.Text = ''
-		expandbutton.Parent = slider
-		local expandicon = Instance.new('ImageLabel')
-		expandicon.Name = 'Expand'
-		expandicon.Size = UDim2.fromOffset(9, 5)
-		expandicon.Position = UDim2.fromOffset(4, 4)
-		expandicon.BackgroundTransparency = 1
-		expandicon.Image = getcustomasset('skidv5/assets/new/expandicon.png')
-		expandicon.ImageColor3 = color.Dark(uipallet.Text, 0.43)
-		expandicon.Parent = expandbutton
-		local rainbow = Instance.new('TextButton')
-		rainbow.Name = 'Rainbow'
-		rainbow.Size = UDim2.fromOffset(12, 12)
-		rainbow.Position = UDim2.new(1, -42, 0, 10)
-		rainbow.BackgroundTransparency = 1
-		rainbow.Text = ''
-		rainbow.Parent = slider
-		local rainbow1 = Instance.new('ImageLabel')
-		rainbow1.Size = UDim2.fromOffset(12, 12)
-		rainbow1.BackgroundTransparency = 1
-		rainbow1.Image = getcustomasset('skidv5/assets/new/rainbow_1.png')
-		rainbow1.ImageColor3 = color.Light(uipallet.Main, 0.37)
-		rainbow1.Parent = rainbow
-		local rainbow2 = rainbow1:Clone()
-		rainbow2.Image = getcustomasset('skidv5/assets/new/rainbow_2.png')
-		rainbow2.Parent = rainbow
-		local rainbow3 = rainbow1:Clone()
-		rainbow3.Image = getcustomasset('skidv5/assets/new/rainbow_3.png')
-		rainbow3.Parent = rainbow
-		local rainbow4 = rainbow1:Clone()
-		rainbow4.Image = getcustomasset('skidv5/assets/new/rainbow_4.png')
-		rainbow4.Parent = rainbow
-		local knob = Instance.new('ImageLabel')
-		knob.Name = 'Knob'
-		knob.Size = UDim2.fromOffset(26, 12)
-		knob.Position = UDim2.fromOffset(slidercolorpos[4] - 3, -5)
-		knob.BackgroundTransparency = 1
-		knob.Image = getcustomasset('skidv5/assets/new/guislider.png')
-		knob.ImageColor3 = slidercolors[4]
-		knob.Parent = holder
-		optionsettings.Function = optionsettings.Function or function() end
-		local rainbowTable = {}
-		for i = 0, 1, 0.1 do
-			table.insert(rainbowTable, ColorSequenceKeypoint.new(i, Color3.fromHSV(i, 1, 1)))
-		end
-		local colorSlider = createSlider('Custom color', ColorSequence.new(rainbowTable))
-		local satSlider = createSlider('Saturation', ColorSequence.new({
-			ColorSequenceKeypoint.new(0, Color3.fromHSV(0, 0, optionapi.Value)),
-			ColorSequenceKeypoint.new(1, Color3.fromHSV(optionapi.Hue, 1, optionapi.Value))
-		}))
-		local vibSlider = createSlider('Vibrance', ColorSequence.new({
-			ColorSequenceKeypoint.new(0, Color3.fromHSV(0, 0, 0)),
-			ColorSequenceKeypoint.new(1, Color3.fromHSV(optionapi.Hue, optionapi.Sat, 1))
-		}))
-		local normalknob = getcustomasset('skidv5/assets/new/guislider.png')
-		local rainbowknob = getcustomasset('skidv5/assets/new/guisliderrain.png')
-		local rainbowthread
+		row.MouseButton1Click:Connect(function()
+			expanded.Visible = not expanded.Visible
+			arrow.Rotation = expanded.Visible and 180 or 0
+			if expanded.Visible then
+				local content = 0
+				for _, v in expanded:GetChildren() do
+					if v:IsA('TextButton') or v:IsA('Frame') then
+						content += v.Size.Y.Offset + 2
+					end
+				end
+				expanded.Size = UDim2.fromOffset(478, math.min(content, 240))
+			end
+		end)
 
 		function optionapi:Save(tab)
-			tab[optionsettings.Name] = {
-				Hue = self.Hue,
-				Sat = self.Sat,
-				Value = self.Value,
-				Notch = self.Notch,
-				CustomColor = self.CustomColor,
-				Rainbow = self.Rainbow
+			tab[settings.Name] = {
+				List = self.List,
+				ListEnabled = self.ListEnabled
 			}
 		end
 
 		function optionapi:Load(tab)
-			if tab.Rainbow then
-				self:Toggle()
-			end
-			if self.Rainbow or tab.CustomColor then
-				self:SetValue(tab.Hue, tab.Sat, tab.Value)
-			else
-				self:SetValue(nil, nil, nil, tab.Notch)
-			end
+			self.List = table.clone(tab.List or {})
+			self.ListEnabled = table.clone(tab.ListEnabled or {})
+			rebuild()
+			settings.Function(self.List)
 		end
 
-		function optionapi:SetValue(h, s, v, n)
-			if n then
-				if self.Rainbow then
-					self:Toggle()
-				end
-				self.CustomColor = false
-				h, s, v = slidercolors[n]:ToHSV()
-			else
-				self.CustomColor = true
-			end
+		rebuild()
+		api.Options[settings.Name] = optionapi
+		addTooltip(row, settings.Tooltip)
 
-			self.Hue = h or self.Hue
-			self.Sat = s or self.Sat
-			self.Value = v or self.Value
-			self.Notch = n
-			preview.ImageColor3 = Color3.fromHSV(self.Hue, self.Sat, self.Value)
-			satSlider.Slider.UIGradient.Color = ColorSequence.new({
-				ColorSequenceKeypoint.new(0, Color3.fromHSV(0, 0, self.Value)),
-				ColorSequenceKeypoint.new(1, Color3.fromHSV(self.Hue, 1, self.Value))
-			})
-			vibSlider.Slider.UIGradient.Color = ColorSequence.new({
-				ColorSequenceKeypoint.new(0, Color3.fromHSV(0, 0, 0)),
-				ColorSequenceKeypoint.new(1, Color3.fromHSV(self.Hue, self.Sat, 1))
-			})
-
-			if self.Rainbow or self.CustomColor then
-				knob.Image = rainbowknob
-				knob.ImageColor3 = Color3.new(1, 1, 1)
-				tween:Tween(knob, uipallet.Tween, {
-					Position = UDim2.fromOffset(slidercolorpos[4] - 3, -5)
-				})
-			else
-				knob.Image = normalknob
-				knob.ImageColor3 = Color3.fromHSV(self.Hue, self.Sat, self.Value)
-				tween:Tween(knob, uipallet.Tween, {
-					Position = UDim2.fromOffset(slidercolorpos[n or 4] - 3, -5)
-				})
-			end
-
-			if self.Rainbow then
-				if h then
-					colorSlider.Slider.Fill.Size = UDim2.fromScale(math.clamp(self.Hue, 0.04, 0.96), 1)
-				end
-				if s then
-					satSlider.Slider.Fill.Size = UDim2.fromScale(math.clamp(self.Sat, 0.04, 0.96), 1)
-				end
-				if v then
-					vibSlider.Slider.Fill.Size = UDim2.fromScale(math.clamp(self.Value, 0.04, 0.96), 1)
-				end
-			else
-				if h then
-					tween:Tween(colorSlider.Slider.Fill, uipallet.Tween, {
-						Size = UDim2.fromScale(math.clamp(self.Hue, 0.04, 0.96), 1)
-					})
-				end
-				if s then
-					tween:Tween(satSlider.Slider.Fill, uipallet.Tween, {
-						Size = UDim2.fromScale(math.clamp(self.Sat, 0.04, 0.96), 1)
-					})
-				end
-				if v then
-					tween:Tween(vibSlider.Slider.Fill, uipallet.Tween, {
-						Size = UDim2.fromScale(math.clamp(self.Value, 0.04, 0.96), 1)
-					})
-				end
-			end
-			optionsettings.Function(self.Hue, self.Sat, self.Value)
-		end
+		return optionapi
+	end,
+	AddItem = function(children, settings, api)
+		local optionapi = {
+			Name = settings.Name,
+			Enabled = settings.Enabled or false,
+			Index = getTableSize(api.Options)
+		}
+		local row = Instance.new('TextButton')
+		row.Name = settings.Name
+		row.Size = UDim2.fromOffset(478, 40)
+		row.BackgroundColor3 = settings.Darker and color.Dark(uipallet.Main, 0.02) or uipallet.Main
+		row.BorderSizePixel = 0
+		row.AutoButtonColor = false
+		row.Text = ''
+		row.Parent = children
+		addCorner(row, UDim.new(0, 4))
+		local name = Instance.new('TextLabel')
+		name.Size = UDim2.fromOffset(300, 40)
+		name.Position = UDim2.fromOffset(10, 0)
+		name.BackgroundTransparency = 1
+		name.Text = settings.Name
+		name.TextXAlignment = Enum.TextXAlignment.Left
+		name.TextColor3 = color.Dark(uipallet.Text, 0.16)
+		name.TextSize = 14
+		name.FontFace = uipallet.Font
+		name.Parent = row
+		local knob = Instance.new('Frame')
+		knob.Name = 'Knob'
+		knob.Size = UDim2.fromOffset(36, 18)
+		knob.Position = UDim2.new(1, -10, 0.5, 0)
+		knob.AnchorPoint = Vector2.new(1, 0.5)
+		knob.BackgroundColor3 = color.Light(uipallet.Main, 0.14)
+		knob.BorderSizePixel = 0
+		knob.Parent = row
+		addCorner(knob, UDim.new(1, 0))
+		local knobinner = Instance.new('Frame')
+		knobinner.Name = 'KnobInner'
+		knobinner.Size = UDim2.fromOffset(28, 14)
+		knobinner.Position = UDim2.fromOffset(3, 2)
+		knobinner.BackgroundColor3 = color.Light(uipallet.Main, 0.5)
+		knobinner.BorderSizePixel = 0
+		knobinner.Parent = knob
+		addCorner(knobinner, UDim.new(1, 0))
+		settings.Function = settings.Function or function() end
+		optionapi.Object = row
+		optionapi.Knob = knob
 
 		function optionapi:Toggle()
-			self.Rainbow = not self.Rainbow
-			if rainbowthread then
-				task.cancel(rainbowthread)
-			end
-
-			if self.Rainbow then
-				knob.Image = rainbowknob
-				table.insert(mainapi.RainbowTable, self)
-
-				rainbow1.ImageColor3 = Color3.fromRGB(5, 127, 100)
-				rainbowthread = task.delay(0.1, function()
-					rainbow2.ImageColor3 = Color3.fromRGB(228, 125, 43)
-					rainbowthread = task.delay(0.1, function()
-						rainbow3.ImageColor3 = Color3.fromRGB(225, 46, 52)
-						rainbowthread = nil
-					end)
-				end)
+			self.Enabled = not self.Enabled
+			if self.Enabled then
+				local accent = Color3.fromHSV(mainapi.GUIColor.Hue, mainapi.GUIColor.Sat, mainapi.GUIColor.Value)
+				knob.BackgroundColor3 = accent
+				knobinner.BackgroundColor3 = color.Light(accent, 0.65)
+				tween:Tween(knobinner, uipallet.Tween, {
+					Position = UDim2.fromOffset(5, 2)
+				})
 			else
-				self:SetValue(nil, nil, nil, 4)
-				knob.Image = normalknob
-				local ind = table.find(mainapi.RainbowTable, self)
-				if ind then
-					table.remove(mainapi.RainbowTable, ind)
-				end
+				knob.BackgroundColor3 = color.Light(uipallet.Main, 0.14)
+				knobinner.BackgroundColor3 = color.Light(uipallet.Main, 0.5)
+				tween:Tween(knobinner, uipallet.Tween, {
+					Position = UDim2.fromOffset(3, 2)
+				})
+			end
+			settings.Function(self.Enabled)
+		end
 
-				rainbow3.ImageColor3 = color.Light(uipallet.Main, 0.37)
-				rainbowthread = task.delay(0.1, function()
-					rainbow2.ImageColor3 = color.Light(uipallet.Main, 0.37)
-					rainbowthread = task.delay(0.1, function()
-						rainbow1.ImageColor3 = color.Light(uipallet.Main, 0.37)
-					end)
-				end)
+		row.MouseButton1Click:Connect(function()
+			optionapi:Toggle()
+		end)
+
+		function optionapi:Save(tab)
+			tab[settings.Name] = {
+				Enabled = self.Enabled
+			}
+		end
+
+		function optionapi:Load(tab)
+			if self.Enabled ~= tab.Enabled then
+				self:Toggle()
 			end
 		end
 
-		expandbutton.MouseEnter:Connect(function()
-			expandicon.ImageColor3 = color.Dark(uipallet.Text, 0.16)
-		end)
-		expandbutton.MouseLeave:Connect(function()
-			expandicon.ImageColor3 = color.Dark(uipallet.Text, 0.43)
-		end)
-		expandbutton.MouseButton1Click:Connect(function()
-			colorSlider.Visible = not colorSlider.Visible
-			satSlider.Visible = colorSlider.Visible
-			vibSlider.Visible = satSlider.Visible
-			expandicon.Rotation = satSlider.Visible and 180 or 0
-		end)
-		preview.MouseButton1Click:Connect(function()
-			preview.Visible = false
-			valuebox.Visible = true
-			valuebox:CaptureFocus()
-			local text = Color3.fromHSV(optionapi.Hue, optionapi.Sat, optionapi.Value)
-			valuebox.Text = math.round(text.R * 255)..', '..math.round(text.G * 255)..', '..math.round(text.B * 255)
-		end)
-		slider.InputBegan:Connect(function(inputObj)
-			if
-				(inputObj.UserInputType == Enum.UserInputType.MouseButton1 or inputObj.UserInputType == Enum.UserInputType.Touch)
-				and (inputObj.Position.Y - slider.AbsolutePosition.Y) > (20 * scale.Scale)
-			then
-				local changed = inputService.InputChanged:Connect(function(input)
-					if input.UserInputType == (inputObj.UserInputType == Enum.UserInputType.MouseButton1 and Enum.UserInputType.MouseMovement or Enum.UserInputType.Touch) then
-						optionapi:SetValue(nil, nil, nil, math.clamp(math.round((input.Position.X - holder.AbsolutePosition.X) / scale.Scale / 27), 1, 7))
-					end
-				end)
-
-				local ended
-				ended = inputObj.Changed:Connect(function()
-					if inputObj.UserInputState == Enum.UserInputState.End then
-						if changed then
-							changed:Disconnect()
-						end
-						if ended then
-							ended:Disconnect()
-						end
-					end
-				end)
-				optionapi:SetValue(nil, nil, nil, math.clamp(math.round((inputObj.Position.X - holder.AbsolutePosition.X) / scale.Scale / 27), 1, 7))
-			end
-		end)
-		rainbow.MouseButton1Click:Connect(function()
-			optionapi:Toggle()
-		end)
-		valuebox.FocusLost:Connect(function(enter)
-			preview.Visible = true
-			valuebox.Visible = false
-			if enter then
-				local commas = valuebox.Text:split(',')
-				local suc, res = pcall(function()
-					return tonumber(commas[1]) and Color3.fromRGB(
-						tonumber(commas[1]),
-						tonumber(commas[2]),
-						tonumber(commas[3])
-					) or Color3.fromHex(valuebox.Text)
-				end)
-
-				if suc then
-					if optionapi.Rainbow then
-						optionapi:Toggle()
-					end
-					optionapi:SetValue(res:ToHSV())
-				end
-			end
-		end)
-
-		optionapi.Object = slider
-		categoryapi.Options[optionsettings.Name] = optionapi
+		api.Options[settings.Name] = optionapi
+		addTooltip(row, settings.Tooltip)
 
 		return optionapi
 	end
+}
 
-	back.MouseEnter:Connect(function()
-		back.ImageColor3 = uipallet.Text
-	end)
-	back.MouseLeave:Connect(function()
-		back.ImageColor3 = color.Light(uipallet.Main, 0.37)
-	end)
-	back.MouseButton1Click:Connect(function()
-		settingspane.Visible = false
-	end)
-	close.MouseButton1Click:Connect(function()
-		settingspane.Visible = false
-	end)
-	discordbutton.MouseButton1Click:Connect(function()
-		task.spawn(function()
-			local body = httpService:JSONEncode({
-				nonce = httpService:GenerateGUID(false),
-				args = {
-					invite = {code = 'kGaCMBwauq'},
-					code = 'kGaCMBwauq'
-				},
-				cmd = 'INVITE_BROWSER'
-			})
-
-			for i = 1, 14 do
-				task.spawn(function()
-					request({
-						Method = 'POST',
-						Url = 'http://127.0.0.1:64'..(53 + i)..'/rpc?v=1',
-						Headers = {
-							['Content-Type'] = 'application/json',
-							Origin = 'https://discord.com'
-						},
-						Body = body
-					})
-				end)
-			end
-		end)
-
-		task.spawn(function()
-			tooltip.Text = 'Copied!'
-			setclipboard('https://discord.gg/kGaCMBwauq')
-		end)
-	end)
-	settingsbutton.MouseEnter:Connect(function()
-		settingsicon.ImageColor3 = uipallet.Text
-	end)
-	settingsbutton.MouseLeave:Connect(function()
-		settingsicon.ImageColor3 = color.Light(uipallet.Main, 0.37)
-	end)
-	settingsbutton.MouseButton1Click:Connect(function()
-		settingspane.Visible = true
-	end)
-	windowlist:GetPropertyChangedSignal('AbsoluteContentSize'):Connect(function()
-		if self.ThreadFix then
-			setthreadidentity(8)
+mainapi.Components = setmetatable({}, {
+	__newindex = function(tab, ind, func)
+		for _, v in mainapi.Modules do
+			rawset(v, 'Create'..ind, func)
 		end
-		window.Size = UDim2.fromOffset(220, 42 + windowlist.AbsoluteContentSize.Y / scale.Scale)
-		for _, v in categoryapi.Buttons do
-			if v.Icon then
-				v.Object.Text = string.rep(' ', 36 * scale.Scale)..v.Name
-			end
+		for _, v in mainapi.Legit.Modules do
+			rawset(v, 'Create'..ind, func)
+		end
+		rawset(tab, ind, func)
+	end
+})
+
+task.spawn(function()
+	local hue = 0
+	while true do
+		task.wait(1 / mainapi.RainbowUpdateSpeed.Value)
+		if mainapi.Loaded ~= nil and mainapi.GUIColor.Rainbow then
+			hue = (tick() * (0.2 * mainapi.RainbowSpeed.Value)) % 1
+			mainapi.RainbowHue = hue
+			mainapi:UpdateGUI(hue, 1, 1)
+		end
+	end
+end)
+
+addMaid(mainapi)
+
+local gui = Instance.new('ScreenGui')
+gui.Name = 'SkidV5'
+gui.DisplayOrder = 2147483647
+gui.IgnoreGuiInset = true
+pcall(function()
+	gui.Parent = game:GetService('CoreGui')
+end)
+if not gui.Parent then
+	gui.Parent = players.LocalPlayer:WaitForChild('PlayerGui')
+end
+mainapi.gui = gui
+
+local scaledgui = Instance.new('Frame')
+scaledgui.Name = 'ScaledGui'
+scaledgui.Size = UDim2.fromScale(1, 1)
+scaledgui.BackgroundTransparency = 1
+scaledgui.BorderSizePixel = 0
+scaledgui.Parent = gui
+local scale = Instance.new('UIScale')
+scale.Parent = scaledgui
+
+local blurframe = Instance.new('Frame')
+blurframe.Name = 'BlurFrame'
+blurframe.Size = UDim2.fromScale(1, 1)
+blurframe.BackgroundColor3 = Color3.new(0.05, 0.05, 0.05)
+blurframe.BackgroundTransparency = 0.5
+blurframe.BorderSizePixel = 0
+blurframe.Visible = false
+blurframe.Parent = scaledgui
+addBlur(blurframe)
+
+local toolblur = Instance.new('Frame')
+toolblur.Name = 'TooltipBlur'
+toolblur.Size = UDim2.fromOffset(0, 0)
+toolblur.BackgroundColor3 = Color3.new()
+toolblur.BackgroundTransparency = 0.5
+toolblur.BorderSizePixel = 0
+toolblur.Visible = false
+toolblur.Parent = scaledgui
+addBlur(toolblur)
+addCorner(toolblur, UDim.new(0, 4))
+
+local tooltip = Instance.new('TextLabel')
+tooltip.Name = 'Tooltip'
+tooltip.Size = UDim2.fromOffset(0, 0)
+tooltip.Position = UDim2.fromOffset(10, 10)
+tooltip.ZIndex = 6
+tooltip.BackgroundTransparency = 1
+tooltip.TextColor3 = uipallet.Text
+tooltip.TextSize = 13
+tooltip.FontFace = uipallet.Font
+tooltip.Visible = false
+tooltip.Parent = scaledgui
+
+notifications.Name = 'Notifications'
+notifications.Size = UDim2.fromScale(1, 1)
+notifications.BackgroundTransparency = 1
+notifications.BorderSizePixel = 0
+notifications.Parent = scaledgui
+
+local overlaybar
+
+function mainapi:BlurCheck()
+	blurframe.Visible = clickgui.Visible and mainapi.Blur and mainapi.Blur.Enabled
+	if overlaybar then
+		overlaybar.Visible = clickgui.Visible and mainapi.OverlaysButton and mainapi.OverlaysButton.Enabled
+	end
+end
+
+local function createModule(children, modulesettings, api, width)
+	local moduleapi = {
+		Type = 'Module',
+		Enabled = false,
+		Index = getTableSize(api.Modules),
+		Options = {},
+		Category = api.Name,
+		Bind = {}
+	}
+	modulesettings.Function = modulesettings.Function or function() end
+	local row = Instance.new('TextButton')
+	row.Name = modulesettings.Name
+	row.Size = UDim2.fromOffset(width, 40)
+	row.BackgroundColor3 = uipallet.Main
+	row.BorderSizePixel = 0
+	row.AutoButtonColor = false
+	row.Text = ''
+	row.Parent = children
+	addCorner(row, UDim.new(0, 4))
+	local rowgradient = Instance.new('UIGradient')
+	rowgradient.Enabled = false
+	rowgradient.Parent = row
+	local name = Instance.new('TextLabel')
+	name.Size = UDim2.fromOffset(width - 140, 40)
+	name.Position = UDim2.fromOffset(10, 0)
+	name.BackgroundTransparency = 1
+	name.Text = modulesettings.Name
+	name.TextXAlignment = Enum.TextXAlignment.Left
+	name.TextColor3 = color.Dark(uipallet.Text, 0.16)
+	name.TextSize = 14
+	name.FontFace = uipallet.Font
+	name.Parent = row
+	local dots = Instance.new('Frame')
+	dots.Name = 'Dots'
+	dots.Size = UDim2.fromOffset(25, 40)
+	dots.Position = UDim2.new(1, -25, 0, 0)
+	dots.BackgroundTransparency = 1
+	dots.Parent = row
+	local dotsimage = Instance.new('ImageLabel')
+	dotsimage.Name = 'Dots'
+	dotsimage.Size = UDim2.fromOffset(3, 16)
+	dotsimage.Position = UDim2.fromOffset(11, 12)
+	dotsimage.BackgroundTransparency = 1
+	dotsimage.Image = getcustomasset('skidv5/assets/new/dots.png')
+	dotsimage.ImageColor3 = color.Light(uipallet.Main, 0.37)
+	dotsimage.Parent = dots
+	local bind = Instance.new('TextButton')
+	bind.Name = 'Bind'
+	bind.Size = UDim2.fromOffset(20, 20)
+	bind.Position = UDim2.new(1, -30, 0.5, 0)
+	bind.AnchorPoint = Vector2.new(1, 0.5)
+	bind.BackgroundColor3 = Color3.new(1, 1, 1)
+	bind.BackgroundTransparency = 0.94
+	bind.BorderSizePixel = 0
+	bind.AutoButtonColor = false
+	bind.Text = ''
+	bind.Visible = false
+	bind.Parent = row
+	addCorner(bind, UDim.new(0, 4))
+	local bindicon = Instance.new('ImageLabel')
+	bindicon.Name = 'Icon'
+	bindicon.Size = UDim2.fromOffset(10, 10)
+	bindicon.Position = UDim2.fromOffset(5, 5)
+	bindicon.BackgroundTransparency = 1
+	bindicon.Image = getcustomasset('skidv5/assets/new/bind.png')
+	bindicon.ImageColor3 = color.Dark(uipallet.Text, 0.43)
+	bindicon.Parent = bind
+	local bindtext = Instance.new('TextLabel')
+	bindtext.Name = 'TextLabel'
+	bindtext.Size = UDim2.fromScale(1, 1)
+	bindtext.Position = UDim2.fromOffset(0, 1)
+	bindtext.BackgroundTransparency = 1
+	bindtext.Visible = false
+	bindtext.Text = ''
+	bindtext.TextColor3 = color.Dark(uipallet.Text, 0.43)
+	bindtext.TextSize = 9
+	bindtext.FontFace = uipallet.FontSemiBold
+	bindtext.Parent = bind
+	row.LayoutOrder = moduleapi.Index
+	moduleapi.Object = row
+	moduleapi.Name = modulesettings.Name
+
+	bind.MouseEnter:Connect(function()
+		bindtext.Visible = false
+		bindicon.Visible = true
+		bindicon.Image = getcustomasset('skidv5/assets/new/edit.png')
+	end)
+	bind.MouseLeave:Connect(function()
+		bindtext.Visible = #moduleapi.Bind > 0
+		bindicon.Visible = not bindtext.Visible
+		bindicon.Image = getcustomasset('skidv5/assets/new/bind.png')
+	end)
+	bind.MouseButton1Click:Connect(function()
+		mainapi.Binding = moduleapi
+	end)
+
+	function moduleapi:SetBind(tab, mouse)
+		if type(tab) ~= 'table' then
+			tab = {}
+		end
+		self.Bind = tab
+		bindtext.Text = table.concat(tab, ' + '):upper()
+		bindtext.Visible = #tab > 0
+		bindicon.Visible = not bindtext.Visible
+		bind.Size = UDim2.fromOffset(math.max(getfontsize(bindtext.Text, 9, uipallet.Font).X + 14, 20), 20)
+		bind.Visible = #tab > 0
+	end
+
+	local function restyle()
+		if moduleapi.Enabled then
+			row.BackgroundColor3 = Color3.fromHSV(mainapi.GUIColor.Hue, mainapi.GUIColor.Sat, mainapi.GUIColor.Value)
+			row.TextColor3 = mainapi:TextColor(mainapi.GUIColor.Hue, mainapi.GUIColor.Sat, mainapi.GUIColor.Value)
+			name.TextColor3 = row.TextColor3
+			bindtext.TextColor3 = row.TextColor3
+			bindicon.ImageColor3 = row.TextColor3
+			dotsimage.ImageColor3 = row.TextColor3
+		else
+			row.BackgroundColor3 = uipallet.Main
+			name.TextColor3 = color.Dark(uipallet.Text, 0.16)
+			bindtext.TextColor3 = color.Dark(uipallet.Text, 0.43)
+			bindicon.ImageColor3 = color.Dark(uipallet.Text, 0.43)
+			dotsimage.ImageColor3 = color.Light(uipallet.Main, 0.37)
+		end
+	end
+
+	function moduleapi:Toggle(arg)
+		self.Enabled = not self.Enabled
+		restyle()
+		modulesettings.Function(self.Enabled)
+		if not arg and mainapi.ToggleNotifications and mainapi.ToggleNotifications.Enabled then
+			mainapi:CreateNotification('Module Toggled', modulesettings.Name.."<font color='#FFFFFF'> has been </font>"..(self.Enabled and "<font color='#5AFF5A'>Enabled</font>" or "<font color='#FF5A5A'>Disabled</font>").."<font color='#FFFFFF'>!</font>", 0.75)
+		end
+		mainapi:UpdateTextGUI()
+	end
+
+	row.MouseButton1Click:Connect(function()
+		moduleapi:Toggle()
+	end)
+	row.MouseEnter:Connect(function()
+		if not moduleapi.Enabled then
+			row.BackgroundColor3 = color.Light(uipallet.Main, 0.02)
+		end
+	end)
+	row.MouseLeave:Connect(function()
+		if not moduleapi.Enabled then
+			row.BackgroundColor3 = uipallet.Main
 		end
 	end)
 
-	self.Categories.Main = categoryapi
+	for name, comp in components do
+		if name ~= 'Divider' then
+			moduleapi['Create'..name] = function(settings)
+				return comp(children, settings, moduleapi)
+			end
+		end
+	end
 
-	return categoryapi
+	addMaid(moduleapi)
+	api.Modules[modulesettings.Name] = moduleapi
+	addTooltip(row, modulesettings.Tooltip)
+
+	return moduleapi
 end
 
 function mainapi:CreateCategory(categorysettings)
 	local categoryapi = {
 		Type = 'Category',
-		Expanded = false
+		Expanded = false,
+		Options = {},
+		Buttons = {},
+		Modules = {},
+		Name = categorysettings.Name
 	}
-
-	local window = Instance.new('TextButton')
-	window.Name = categorysettings.Name..'Category'
-	window.Size = UDim2.fromOffset(220, 41)
-	window.Position = UDim2.fromOffset(236, 60)
-	window.BackgroundColor3 = uipallet.Main
-	window.AutoButtonColor = false
+	local window = Instance.new('Frame')
+	window.Name = categorysettings.Name
+	window.Size = UDim2.fromOffset(490, 41)
+	window.Position = UDim2.fromOffset(0, 0)
+	window.BackgroundTransparency = 1
+	window.BorderSizePixel = 0
 	window.Visible = false
-	window.Text = ''
-	window.Parent = clickgui
-	addBlur(window)
-	addCorner(window)
-	makeDraggable(window)
-	local icon = Instance.new('ImageLabel')
-	icon.Name = 'Icon'
-	icon.Size = categorysettings.Size
-	icon.Position = UDim2.fromOffset(12, (icon.Size.X.Offset > 20 and 14 or 13))
-	icon.BackgroundTransparency = 1
-	icon.Image = categorysettings.Icon
-	icon.ImageColor3 = uipallet.Text
-	icon.Parent = window
+	window.Parent = contentcontainer
+	categoryapi.Icon = categorysettings.Icon
 	local title = Instance.new('TextLabel')
-	title.Name = 'Title'
-	title.Size = UDim2.new(1, -(categorysettings.Size.X.Offset > 18 and 40 or 33), 0, 41)
-	title.Position = UDim2.fromOffset(math.abs(title.Size.X.Offset), 0)
+	title.Size = UDim2.fromOffset(300, 41)
+	title.Position = UDim2.fromOffset(12, 0)
 	title.BackgroundTransparency = 1
 	title.Text = categorysettings.Name
 	title.TextXAlignment = Enum.TextXAlignment.Left
-	title.TextColor3 = uipallet.Text
-	title.TextSize = 13
-	title.FontFace = uipallet.Font
+	title.TextColor3 = color.Dark(uipallet.Text, 0.16)
+	title.TextSize = 14
+	title.FontFace = uipallet.FontSemiBold
 	title.Parent = window
 	local arrowbutton = Instance.new('TextButton')
 	arrowbutton.Name = 'Arrow'
-	arrowbutton.Size = UDim2.fromOffset(40, 40)
+	arrowbutton.Size = UDim2.fromOffset(40, 41)
 	arrowbutton.Position = UDim2.new(1, -40, 0, 0)
 	arrowbutton.BackgroundTransparency = 1
 	arrowbutton.Text = ''
 	arrowbutton.Parent = window
-	local arrow = Instance.new('ImageLabel')
-	arrow.Name = 'Arrow'
-	arrow.Size = UDim2.fromOffset(9, 4)
-	arrow.Position = UDim2.fromOffset(20, 18)
+	local arrow = Instance.new('TextLabel')
+	arrow.Size = UDim2.fromOffset(14, 41)
+	arrow.Position = UDim2.fromOffset(13, 0)
 	arrow.BackgroundTransparency = 1
-	arrow.Image = getcustomasset('skidv5/assets/new/expandup.png')
-	arrow.ImageColor3 = Color3.fromRGB(140, 140, 140)
-	arrow.Rotation = 180
+	arrow.Text = '▼'
+	arrow.TextColor3 = color.Light(uipallet.Main, 0.37)
+	arrow.TextSize = 9
+	arrow.FontFace = uipallet.Font
 	arrow.Parent = arrowbutton
-	local children = Instance.new('ScrollingFrame')
-	children.Name = 'Children'
-	children.Size = UDim2.new(1, 0, 1, -41)
-	children.Position = UDim2.fromOffset(0, 37)
-	children.BackgroundTransparency = 1
-	children.BorderSizePixel = 0
-	children.Visible = false
-	children.ScrollBarThickness = 2
-	children.ScrollBarImageTransparency = 0.75
-	children.CanvasSize = UDim2.new()
-	children.Parent = window
 	local divider = Instance.new('Frame')
-	divider.Name = 'Divider'
 	divider.Size = UDim2.new(1, 0, 0, 1)
-	divider.Position = UDim2.fromOffset(0, 37)
+	divider.Position = UDim2.fromOffset(0, 40)
 	divider.BackgroundColor3 = Color3.new(1, 1, 1)
-	divider.BackgroundTransparency = 0.928
+	divider.BackgroundTransparency = 0.93
 	divider.BorderSizePixel = 0
-	divider.Visible = false
 	divider.Parent = window
-	local windowlist = Instance.new('UIListLayout')
-	windowlist.SortOrder = Enum.SortOrder.LayoutOrder
-	windowlist.HorizontalAlignment = Enum.HorizontalAlignment.Center
-	windowlist.Parent = children
+	local windowlist = Instance.new('ScrollingFrame')
+	windowlist.Name = 'Children'
+	windowlist.Size = UDim2.new(1, 0, 1, -41)
+	windowlist.Position = UDim2.fromOffset(0, 41)
+	windowlist.BackgroundTransparency = 1
+	windowlist.BorderSizePixel = 0
+	windowlist.ScrollBarThickness = 2
+	windowlist.ScrollBarImageTransparency = 0.75
+	windowlist.AutomaticCanvasSize = Enum.AutomaticSize.Y
+	windowlist.CanvasSize = UDim2.fromOffset(0, 0)
+	windowlist.Parent = window
+	local listlayout = Instance.new('UIListLayout')
+	listlayout.SortOrder = Enum.SortOrder.LayoutOrder
+	listlayout.HorizontalAlignment = Enum.HorizontalAlignment.Center
+	listlayout.Padding = UDim.new(0, 3)
+	listlayout.Parent = windowlist
+	categoryapi.Window = window
+	categoryapi.Object = window
+	categoryapi.Content = windowlist
+	categorysettings.Window = window
+	categorysettings.Function = categorysettings.Function or function() end
 
-	function categoryapi:CreateModule(modulesettings)
-		mainapi:Remove(modulesettings.Name)
-		local moduleapi = {
-			Enabled = false,
-			Options = {},
-			Bind = {},
-			Index = getTableSize(mainapi.Modules),
-			ExtraText = modulesettings.ExtraText,
-			Name = modulesettings.Name,
-			Category = categorysettings.Name
-		}
-
-		local hovered = false
-		local modulebutton = Instance.new('TextButton')
-		modulebutton.Name = modulesettings.Name
-		modulebutton.Size = UDim2.fromOffset(220, 40)
-		modulebutton.BackgroundColor3 = uipallet.Main
-		modulebutton.BorderSizePixel = 0
-		modulebutton.AutoButtonColor = false
-		modulebutton.Text = '            '..modulesettings.Name
-		modulebutton.TextXAlignment = Enum.TextXAlignment.Left
-		modulebutton.TextColor3 = color.Dark(uipallet.Text, 0.16)
-		modulebutton.TextSize = 14
-		modulebutton.FontFace = uipallet.Font
-		modulebutton.Parent = children
-		local gradient = Instance.new('UIGradient')
-		gradient.Rotation = 90
-		gradient.Enabled = false
-		gradient.Parent = modulebutton
-		local modulechildren = Instance.new('Frame')
-		local bind = Instance.new('TextButton')
-		addTooltip(modulebutton, modulesettings.Tooltip)
-		addTooltip(bind, 'Click to bind')
-		bind.Name = 'Bind'
-		bind.Size = UDim2.fromOffset(20, 21)
-		bind.Position = UDim2.new(1, -36, 0, 9)
-		bind.AnchorPoint = Vector2.new(1, 0)
-		bind.BackgroundColor3 = Color3.new(1, 1, 1)
-		bind.BackgroundTransparency = 0.92
-		bind.BorderSizePixel = 0
-		bind.AutoButtonColor = false
-		bind.Visible = false
-		bind.Text = ''
-		addCorner(bind, UDim.new(0, 4))
-		local bindicon = Instance.new('ImageLabel')
-		bindicon.Name = 'Icon'
-		bindicon.Size = UDim2.fromOffset(12, 12)
-		bindicon.Position = UDim2.new(0.5, -6, 0, 5)
-		bindicon.BackgroundTransparency = 1
-		bindicon.Image = getcustomasset('skidv5/assets/new/bind.png')
-		bindicon.ImageColor3 = color.Dark(uipallet.Text, 0.43)
-		bindicon.Parent = bind
-		local bindtext = Instance.new('TextLabel')
-		bindtext.Size = UDim2.fromScale(1, 1)
-		bindtext.Position = UDim2.fromOffset(0, 1)
-		bindtext.BackgroundTransparency = 1
-		bindtext.Visible = false
-		bindtext.Text = ''
-		bindtext.TextColor3 = color.Dark(uipallet.Text, 0.43)
-		bindtext.TextSize = 12
-		bindtext.FontFace = uipallet.Font
-		bindtext.Parent = bind
-		local bindcover = Instance.new('ImageLabel')
-		bindcover.Name = 'Cover'
-		bindcover.Size = UDim2.fromOffset(154, 40)
-		bindcover.BackgroundTransparency = 1
-		bindcover.Visible = false
-		bindcover.Image = getcustomasset('skidv5/assets/new/bindbkg.png')
-		bindcover.ScaleType = Enum.ScaleType.Slice
-		bindcover.SliceCenter = Rect.new(0, 0, 141, 40)
-		bindcover.Parent = modulebutton
-		local bindcovertext = Instance.new('TextLabel')
-		bindcovertext.Name = 'Text'
-		bindcovertext.Size = UDim2.new(1, -10, 1, -3)
-		bindcovertext.BackgroundTransparency = 1
-		bindcovertext.Text = 'PRESS A KEY TO BIND'
-		bindcovertext.TextColor3 = uipallet.Text
-		bindcovertext.TextSize = 11
-		bindcovertext.FontFace = uipallet.Font
-		bindcovertext.Parent = bindcover
-		bind.Parent = modulebutton
-		local dotsbutton = Instance.new('TextButton')
-		dotsbutton.Name = 'Dots'
-		dotsbutton.Size = UDim2.fromOffset(25, 40)
-		dotsbutton.Position = UDim2.new(1, -25, 0, 0)
-		dotsbutton.BackgroundTransparency = 1
-		dotsbutton.Text = ''
-		dotsbutton.Parent = modulebutton
-		local dots = Instance.new('ImageLabel')
-		dots.Name = 'Dots'
-		dots.Size = UDim2.fromOffset(3, 16)
-		dots.Position = UDim2.fromOffset(4, 12)
-		dots.BackgroundTransparency = 1
-		dots.Image = getcustomasset('skidv5/assets/new/dots.png')
-		dots.ImageColor3 = color.Light(uipallet.Main, 0.37)
-		dots.Parent = dotsbutton
-		modulechildren.Name = modulesettings.Name..'Children'
-		modulechildren.Size = UDim2.new(1, 0, 0, 0)
-		modulechildren.BackgroundColor3 = color.Dark(uipallet.Main, 0.02)
-		modulechildren.BorderSizePixel = 0
-		modulechildren.Visible = false
-		modulechildren.Parent = children
-		moduleapi.Children = modulechildren
-		local windowlist = Instance.new('UIListLayout')
-		windowlist.SortOrder = Enum.SortOrder.LayoutOrder
-		windowlist.HorizontalAlignment = Enum.HorizontalAlignment.Center
-		windowlist.Parent = modulechildren
-		local divider = Instance.new('Frame')
-		divider.Name = 'Divider'
-		divider.Size = UDim2.new(1, 0, 0, 1)
-		divider.Position = UDim2.new(0, 0, 1, -1)
-		divider.BackgroundColor3 = Color3.new(0.19, 0.19, 0.19)
-		divider.BackgroundTransparency = 0.52
-		divider.BorderSizePixel = 0
-		divider.Visible = false
-		divider.Parent = modulebutton
-		modulesettings.Function = modulesettings.Function or function() end
-		addMaid(moduleapi)
-
-		function moduleapi:SetBind(tab, mouse)
-			if tab.Mobile then
-				createMobileButton(moduleapi, Vector2.new(tab.X, tab.Y))
-				return
-			end
-
-			self.Bind = table.clone(tab)
-			if mouse then
-				bindcovertext.Text = #tab <= 0 and 'BIND REMOVED' or 'BOUND TO'
-				bindcover.Size = UDim2.fromOffset(getfontsize(bindcovertext.Text, bindcovertext.TextSize).X + 20, 40)
-				task.delay(1, function()
-					bindcover.Visible = false
-				end)
-			end
-
-			if #tab <= 0 then
-				bindtext.Visible = false
-				bindicon.Visible = true
-				bind.Size = UDim2.fromOffset(20, 21)
-			else
-				bind.Visible = true
-				bindtext.Visible = true
-				bindicon.Visible = false
-				bindtext.Text = table.concat(tab, ' + '):upper()
-				bind.Size = UDim2.fromOffset(math.max(getfontsize(bindtext.Text, bindtext.TextSize, bindtext.Font).X + 10, 20), 21)
-			end
+	local function resize()
+		if mainapi.ThreadFix then
+			setthreadidentity(8)
 		end
-
-		function moduleapi:Toggle(multiple)
-			if mainapi.ThreadFix then
-				setthreadidentity(8)
-			end
-			self.Enabled = not self.Enabled
-			divider.Visible = self.Enabled
-			gradient.Enabled = self.Enabled
-			modulebutton.TextColor3 = (hovered or modulechildren.Visible) and uipallet.Text or color.Dark(uipallet.Text, 0.16)
-			modulebutton.BackgroundColor3 = (hovered or modulechildren.Visible) and color.Light(uipallet.Main, 0.02) or uipallet.Main
-			dots.ImageColor3 = self.Enabled and Color3.fromRGB(50, 50, 50) or color.Light(uipallet.Main, 0.37)
-			bindicon.ImageColor3 = color.Dark(uipallet.Text, 0.43)
-			bindtext.TextColor3 = color.Dark(uipallet.Text, 0.43)
-			if not self.Enabled then
-				for _, v in self.Connections do
-					v:Disconnect()
-				end
-				table.clear(self.Connections)
-			end
-			if not multiple then
-				mainapi:UpdateTextGUI()
-			end
-			task.spawn(modulesettings.Function, self.Enabled)
-		end
-
-		for i, v in components do
-			moduleapi['Create'..i] = function(_, optionsettings)
-				return v(optionsettings, modulechildren, moduleapi)
-			end
-		end
-
-		bind.MouseEnter:Connect(function()
-			bindtext.Visible = false
-			bindicon.Visible = not bindtext.Visible
-			bindicon.Image = getcustomasset('skidv5/assets/new/edit.png')
-			if not moduleapi.Enabled then bindicon.ImageColor3 = color.Dark(uipallet.Text, 0.16) end
-		end)
-		bind.MouseLeave:Connect(function()
-			bindtext.Visible = #moduleapi.Bind > 0
-			bindicon.Visible = not bindtext.Visible
-			bindicon.Image = getcustomasset('skidv5/assets/new/bind.png')
-			if not moduleapi.Enabled then
-				bindicon.ImageColor3 = color.Dark(uipallet.Text, 0.43)
-			end
-		end)
-		bind.MouseButton1Click:Connect(function()
-			bindcovertext.Text = 'PRESS A KEY TO BIND'
-			bindcover.Size = UDim2.fromOffset(getfontsize(bindcovertext.Text, bindcovertext.TextSize).X + 20, 40)
-			bindcover.Visible = true
-			mainapi.Binding = moduleapi
-		end)
-		dotsbutton.MouseEnter:Connect(function()
-			if not moduleapi.Enabled then
-				dots.ImageColor3 = uipallet.Text
-			end
-		end)
-		dotsbutton.MouseLeave:Connect(function()
-			if not moduleapi.Enabled then
-				dots.ImageColor3 = color.Light(uipallet.Main, 0.37)
-			end
-		end)
-		dotsbutton.MouseButton1Click:Connect(function()
-			modulechildren.Visible = not modulechildren.Visible
-		end)
-		dotsbutton.MouseButton2Click:Connect(function()
-			modulechildren.Visible = not modulechildren.Visible
-		end)
-		modulebutton.MouseEnter:Connect(function()
-			hovered = true
-			if not moduleapi.Enabled and not modulechildren.Visible then
-				modulebutton.TextColor3 = uipallet.Text
-				modulebutton.BackgroundColor3 = color.Light(uipallet.Main, 0.02)
-			end
-			bind.Visible = #moduleapi.Bind > 0 or hovered or modulechildren.Visible
-		end)
-		modulebutton.MouseLeave:Connect(function()
-			hovered = false
-			if not moduleapi.Enabled and not modulechildren.Visible then
-				modulebutton.TextColor3 = color.Dark(uipallet.Text, 0.16)
-				modulebutton.BackgroundColor3 = uipallet.Main
-			end
-			bind.Visible = #moduleapi.Bind > 0 or hovered or modulechildren.Visible
-		end)
-		modulebutton.MouseButton1Click:Connect(function()
-			moduleapi:Toggle()
-		end)
-		modulebutton.MouseButton2Click:Connect(function()
-			modulechildren.Visible = not modulechildren.Visible
-		end)
-		if inputService.TouchEnabled then
-			local heldbutton = false
-			modulebutton.MouseButton1Down:Connect(function()
-				heldbutton = true
-				local holdtime, holdpos = tick(), inputService:GetMouseLocation()
-				repeat
-					heldbutton = (inputService:GetMouseLocation() - holdpos).Magnitude < 3
-					task.wait()
-				until (tick() - holdtime) > 1 or not heldbutton or not clickgui.Visible
-				if heldbutton and clickgui.Visible then
-					if mainapi.ThreadFix then
-						setthreadidentity(8)
-					end
-					clickgui.Visible = false
-					tooltip.Visible = false
-					mainapi:BlurCheck()
-					for _, mobileButton in mainapi.Modules do
-						if mobileButton.Bind.Button then
-							mobileButton.Bind.Button.Visible = true
-						end
-					end
-
-					local touchconnection
-					touchconnection = inputService.InputBegan:Connect(function(inputType)
-						if inputType.UserInputType == Enum.UserInputType.Touch then
-							if mainapi.ThreadFix then
-								setthreadidentity(8)
-							end
-							createMobileButton(moduleapi, inputType.Position + Vector3.new(0, guiService:GetGuiInset().Y, 0))
-							clickgui.Visible = true
-							mainapi:BlurCheck()
-							for _, mobileButton in mainapi.Modules do
-								if mobileButton.Bind.Button then
-									mobileButton.Bind.Button.Visible = false
-								end
-							end
-							touchconnection:Disconnect()
-						end
-					end)
-				end
-			end)
-			modulebutton.MouseButton1Up:Connect(function()
-				heldbutton = false
-			end)
-		end
-		windowlist:GetPropertyChangedSignal('AbsoluteContentSize'):Connect(function()
-			if mainapi.ThreadFix then
-				setthreadidentity(8)
-			end
-			modulechildren.Size = UDim2.new(1, 0, 0, windowlist.AbsoluteContentSize.Y / scale.Scale)
-		end)
-
-		moduleapi.Object = modulebutton
-		mainapi.Modules[modulesettings.Name] = moduleapi
-
-		local sorting = {}
-		for _, v in mainapi.Modules do
-			sorting[v.Category] = sorting[v.Category] or {}
-			table.insert(sorting[v.Category], v.Name)
-		end
-
-		for _, sort in sorting do
-			table.sort(sort)
-			for i, v in sort do
-				mainapi.Modules[v].Index = i
-				mainapi.Modules[v].Object.LayoutOrder = i
-				mainapi.Modules[v].Children.LayoutOrder = i
-			end
-		end
-
-		return moduleapi
+		local height = categoryapi.Expanded and windowlist.AbsoluteContentSize.Y / scale.Scale or 0
+		window.Size = UDim2.fromOffset(490, math.min(41 + height, 427))
+		windowlist.Size = UDim2.new(1, 0, 1, -41)
 	end
-
-	function categoryapi:Expand()
-		self.Expanded = not self.Expanded
-		children.Visible = self.Expanded
-		arrow.Rotation = self.Expanded and 0 or 180
-		window.Size = UDim2.fromOffset(220, self.Expanded and math.min(41 + windowlist.AbsoluteContentSize.Y / scale.Scale, 601) or 41)
-		divider.Visible = children.CanvasPosition.Y > 10 and children.Visible
-	end
+	windowlist:GetPropertyChangedSignal('AbsoluteContentSize'):Connect(resize)
 
 	arrowbutton.MouseButton1Click:Connect(function()
-		categoryapi:Expand()
+		categoryapi.Expanded = not categoryapi.Expanded
+		windowlist.Visible = categoryapi.Expanded
+		arrow.Rotation = categoryapi.Expanded and 180 or 0
+		resize()
 	end)
-	arrowbutton.MouseButton2Click:Connect(function()
-		categoryapi:Expand()
-	end)
-	arrowbutton.MouseEnter:Connect(function()
-		arrow.ImageColor3 = Color3.fromRGB(220, 220, 220)
-	end)
-	arrowbutton.MouseLeave:Connect(function()
-		arrow.ImageColor3 = Color3.fromRGB(140, 140, 140)
-	end)
-	children:GetPropertyChangedSignal('CanvasPosition'):Connect(function()
-		if self.ThreadFix then
-			setthreadidentity(8)
+
+	for name, comp in components do
+		if name ~= 'Divider' then
+			categoryapi['Create'..name] = function(settings)
+				return comp(windowlist, settings, categoryapi)
+			end
 		end
-		divider.Visible = children.CanvasPosition.Y > 10 and children.Visible
-	end)
-	window.InputBegan:Connect(function(inputObj)
-		if inputObj.Position.Y < window.AbsolutePosition.Y + 41 and inputObj.UserInputType == Enum.UserInputType.MouseButton2 then
-			categoryapi:Expand()
-		end
-	end)
-	windowlist:GetPropertyChangedSignal('AbsoluteContentSize'):Connect(function()
-		if self.ThreadFix then
-			setthreadidentity(8)
-		end
-		children.CanvasSize = UDim2.fromOffset(0, windowlist.AbsoluteContentSize.Y / scale.Scale)
-		if categoryapi.Expanded then
-			window.Size = UDim2.fromOffset(220, math.min(41 + windowlist.AbsoluteContentSize.Y / scale.Scale, 601))
-		end
-	end)
+	end
 
-	categoryapi.Button = self.Categories.Main:CreateButton({
-		Name = categorysettings.Name,
-		Icon = categorysettings.Icon,
-		Size = categorysettings.Size,
-		Window = window
-	})
+	function categoryapi:CreateDivider(text)
+		return components.Divider(windowlist, text)
+	end
 
-	categoryapi.Object = window
-	self.Categories[categorysettings.Name] = categoryapi
+	function categoryapi:CreateModule(modulesettings)
+		local module = createModule(windowlist, modulesettings, categoryapi, 478)
+		mainapi.Modules[module.Name] = module
+		return module
+	end
 
-	return categoryapi
-end
-
-function mainapi:CreateOverlay(categorysettings)
-	local window
-	local categoryapi
-	categoryapi = {
-		Type = 'Overlay',
-		Expanded = false,
-		Button = self.Overlays:CreateToggle({
-			Name = categorysettings.Name,
-			Function = function(callback)
-				window.Visible = callback and (clickgui.Visible or categoryapi.Pinned)
-				if not callback then
-					for _, v in categoryapi.Connections do
-						v:Disconnect()
-					end
-					table.clear(categoryapi.Connections)
-				end
-
-				if categorysettings.Function then
-					task.spawn(categorysettings.Function, callback)
-				end
-			end,
-			Icon = categorysettings.Icon,
-			Size = categorysettings.Size,
-			Position = categorysettings.Position
-		}),
-		Pinned = false,
-		Options = {}
-	}
-
-	window = Instance.new('TextButton')
-	window.Name = categorysettings.Name..'Overlay'
-	window.Size = UDim2.fromOffset(categorysettings.CategorySize or 220, 41)
-	window.Position = UDim2.fromOffset(240, 46)
-	window.BackgroundColor3 = uipallet.Main
-	window.AutoButtonColor = false
-	window.Visible = false
-	window.Text = ''
-	window.Parent = scaledgui
-	local blur = addBlur(window)
-	addCorner(window)
-	makeDraggable(window)
-	local icon = Instance.new('ImageLabel')
-	icon.Name = 'Icon'
-	icon.Size = categorysettings.Size
-	icon.Position = UDim2.fromOffset(12, (icon.Size.X.Offset > 14 and 14 or 13))
-	icon.BackgroundTransparency = 1
-	icon.Image = categorysettings.Icon
-	icon.ImageColor3 = uipallet.Text
-	icon.Parent = window
-	local title = Instance.new('TextLabel')
-	title.Name = 'Title'
-	title.Size = UDim2.new(1, -32, 0, 41)
-	title.Position = UDim2.fromOffset(math.abs(title.Size.X.Offset), 0)
-	title.BackgroundTransparency = 1
-	title.Text = categorysettings.Name
-	title.TextXAlignment = Enum.TextXAlignment.Left
-	title.TextColor3 = uipallet.Text
-	title.TextSize = 13
-	title.FontFace = uipallet.Font
-	title.Parent = window
-	local pin = Instance.new('ImageButton')
-	pin.Name = 'Pin'
-	pin.Size = UDim2.fromOffset(16, 16)
-	pin.Position = UDim2.new(1, -47, 0, 12)
-	pin.BackgroundTransparency = 1
-	pin.AutoButtonColor = false
-	pin.Image = getcustomasset('skidv5/assets/new/pin.png')
-	pin.ImageColor3 = color.Dark(uipallet.Text, 0.43)
-	pin.Parent = window
-	local dotsbutton = Instance.new('TextButton')
-	dotsbutton.Name = 'Dots'
-	dotsbutton.Size = UDim2.fromOffset(17, 40)
-	dotsbutton.Position = UDim2.new(1, -17, 0, 0)
-	dotsbutton.BackgroundTransparency = 1
-	dotsbutton.Text = ''
-	dotsbutton.Parent = window
-	local dots = Instance.new('ImageLabel')
-	dots.Name = 'Dots'
-	dots.Size = UDim2.fromOffset(3, 16)
-	dots.Position = UDim2.fromOffset(4, 12)
-	dots.BackgroundTransparency = 1
-	dots.Image = getcustomasset('skidv5/assets/new/dots.png')
-	dots.ImageColor3 = color.Light(uipallet.Main, 0.37)
-	dots.Parent = dotsbutton
-	local customchildren = Instance.new('Frame')
-	customchildren.Name = 'CustomChildren'
-	customchildren.Size = UDim2.new(1, 0, 0, 200)
-	customchildren.Position = UDim2.fromScale(0, 1)
-	customchildren.BackgroundTransparency = 1
-	customchildren.Parent = window
-	local children = Instance.new('ScrollingFrame')
-	children.Name = 'Children'
-	children.Size = UDim2.new(1, 0, 1, -41)
-	children.Position = UDim2.fromOffset(0, 37)
-	children.BackgroundColor3 = color.Dark(uipallet.Main, 0.02)
-	children.BorderSizePixel = 0
-	children.Visible = false
-	children.ScrollBarThickness = 2
-	children.ScrollBarImageTransparency = 0.75
-	children.CanvasSize = UDim2.new()
-	children.Parent = window
-	local windowlist = Instance.new('UIListLayout')
-	windowlist.SortOrder = Enum.SortOrder.LayoutOrder
-	windowlist.HorizontalAlignment = Enum.HorizontalAlignment.Center
-	windowlist.Parent = children
+	categoryapi.Update = Instance.new('BindableEvent')
+	categoryapi.ColorUpdate = Instance.new('BindableEvent')
+	mainapi.Categories[categorysettings.Name] = categoryapi
+	table.insert(mainapi.Windows, window)
 	addMaid(categoryapi)
-
-	function categoryapi:Expand(check)
-		if check and not blur.Visible then return end
-		self.Expanded = not self.Expanded
-		children.Visible = self.Expanded
-		dots.ImageColor3 = self.Expanded and uipallet.Text or color.Light(uipallet.Main, 0.37)
-		if self.Expanded then
-			window.Size = UDim2.fromOffset(window.Size.X.Offset, math.min(41 + windowlist.AbsoluteContentSize.Y / scale.Scale, 601))
-		else
-			window.Size = UDim2.fromOffset(window.Size.X.Offset, 41)
-		end
-	end
-
-	function categoryapi:Pin()
-		self.Pinned = not self.Pinned
-		pin.ImageColor3 = self.Pinned and uipallet.Text or color.Dark(uipallet.Text, 0.43)
-	end
-
-	function categoryapi:Update()
-		window.Visible = self.Button.Enabled and (clickgui.Visible or self.Pinned)
-		if self.Expanded then
-			self:Expand()
-		end
-		if clickgui.Visible then
-			window.Size = UDim2.fromOffset(window.Size.X.Offset, 41)
-			window.BackgroundTransparency = 0
-			blur.Visible = true
-			icon.Visible = true
-			title.Visible = true
-			pin.Visible = true
-			dotsbutton.Visible = true
-		else
-			window.Size = UDim2.fromOffset(window.Size.X.Offset, 0)
-			window.BackgroundTransparency = 1
-			blur.Visible = false
-			icon.Visible = false
-			title.Visible = false
-			pin.Visible = false
-			dotsbutton.Visible = false
-		end
-	end
-
-	for i, v in components do
-		categoryapi['Create'..i] = function(self, optionsettings)
-			return v(optionsettings, children, categoryapi)
-		end
-	end
-
-	dotsbutton.MouseEnter:Connect(function()
-		if not children.Visible then
-			dots.ImageColor3 = uipallet.Text
-		end
-	end)
-	dotsbutton.MouseLeave:Connect(function()
-		if not children.Visible then
-			dots.ImageColor3 = color.Light(uipallet.Main, 0.37)
-		end
-	end)
-	dotsbutton.MouseButton1Click:Connect(function()
-		categoryapi:Expand(true)
-	end)
-	dotsbutton.MouseButton2Click:Connect(function()
-		categoryapi:Expand(true)
-	end)
-	pin.MouseButton1Click:Connect(function()
-		categoryapi:Pin()
-	end)
-	window.MouseButton2Click:Connect(function()
-		categoryapi:Expand(true)
-	end)
-	windowlist:GetPropertyChangedSignal('AbsoluteContentSize'):Connect(function()
-		if self.ThreadFix then
-			setthreadidentity(8)
-		end
-		children.CanvasSize = UDim2.fromOffset(0, windowlist.AbsoluteContentSize.Y / scale.Scale)
-		if categoryapi.Expanded then
-			window.Size = UDim2.fromOffset(window.Size.X.Offset, math.min(41 + windowlist.AbsoluteContentSize.Y / scale.Scale, 601))
-		end
-	end)
-	self:Clean(clickgui:GetPropertyChangedSignal('Visible'):Connect(function()
-		categoryapi:Update()
-	end))
-
-	categoryapi:Update()
-	categoryapi.Object = window
-	categoryapi.Children = customchildren
-	self.Categories[categorysettings.Name] = categoryapi
 
 	return categoryapi
 end
@@ -4337,143 +2541,275 @@ function mainapi:CreateCategoryList(categorysettings)
 		List = {},
 		ListEnabled = {},
 		Objects = {},
-		Options = {}
+		Options = {},
+		Modules = {},
+		Name = categorysettings.Name
 	}
 	categorysettings.Color = categorysettings.Color or Color3.fromRGB(5, 134, 105)
-
-	local window = Instance.new('TextButton')
-	window.Name = categorysettings.Name..'CategoryList'
-	window.Size = UDim2.fromOffset(220, 45)
-	window.Position = UDim2.fromOffset(240, 46)
-	window.BackgroundColor3 = uipallet.Main
-	window.AutoButtonColor = false
+	categoryapi.Icon = categorysettings.Icon
+	local window = Instance.new('Frame')
+	window.Name = categorysettings.Name
+	window.Size = UDim2.fromOffset(490, 41)
+	window.Position = UDim2.fromOffset(0, 0)
+	window.BackgroundTransparency = 1
+	window.BorderSizePixel = 0
 	window.Visible = false
-	window.Text = ''
-	window.Parent = clickgui
-	addBlur(window)
-	addCorner(window)
-	makeDraggable(window)
-	local icon = Instance.new('ImageLabel')
-	icon.Name = 'Icon'
-	icon.Size = categorysettings.Size
-	icon.Position = categorysettings.Position or UDim2.fromOffset(12, (categorysettings.Size.X.Offset > 20 and 13 or 12))
-	icon.BackgroundTransparency = 1
-	icon.Image = categorysettings.Icon
-	icon.ImageColor3 = uipallet.Text
-	icon.Parent = window
+	window.Parent = contentcontainer
 	local title = Instance.new('TextLabel')
-	title.Name = 'Title'
-	title.Size = UDim2.new(1, -(categorysettings.Size.X.Offset > 20 and 44 or 36), 0, 20)
-	title.Position = UDim2.fromOffset(math.abs(title.Size.X.Offset), 12)
+	title.Size = UDim2.fromOffset(300, 41)
+	title.Position = UDim2.fromOffset(12, 0)
 	title.BackgroundTransparency = 1
 	title.Text = categorysettings.Name
 	title.TextXAlignment = Enum.TextXAlignment.Left
-	title.TextColor3 = uipallet.Text
-	title.TextSize = 13
-	title.FontFace = uipallet.Font
+	title.TextColor3 = color.Dark(uipallet.Text, 0.16)
+	title.TextSize = 14
+	title.FontFace = uipallet.FontSemiBold
 	title.Parent = window
 	local arrowbutton = Instance.new('TextButton')
 	arrowbutton.Name = 'Arrow'
-	arrowbutton.Size = UDim2.fromOffset(40, 40)
+	arrowbutton.Size = UDim2.fromOffset(40, 41)
 	arrowbutton.Position = UDim2.new(1, -40, 0, 0)
 	arrowbutton.BackgroundTransparency = 1
 	arrowbutton.Text = ''
 	arrowbutton.Parent = window
-	local arrow = Instance.new('ImageLabel')
-	arrow.Name = 'Arrow'
-	arrow.Size = UDim2.fromOffset(9, 4)
-	arrow.Position = UDim2.fromOffset(20, 19)
+	local arrow = Instance.new('TextLabel')
+	arrow.Size = UDim2.fromOffset(14, 41)
+	arrow.Position = UDim2.fromOffset(13, 0)
 	arrow.BackgroundTransparency = 1
-	arrow.Image = getcustomasset('skidv5/assets/new/expandup.png')
-	arrow.ImageColor3 = Color3.fromRGB(140, 140, 140)
-	arrow.Rotation = 180
+	arrow.Text = '▼'
+	arrow.TextColor3 = color.Light(uipallet.Main, 0.37)
+	arrow.TextSize = 9
+	arrow.FontFace = uipallet.Font
 	arrow.Parent = arrowbutton
-	local children = Instance.new('ScrollingFrame')
-	children.Name = 'Children'
-	children.Size = UDim2.new(1, 0, 1, -45)
-	children.Position = UDim2.fromOffset(0, 45)
-	children.BackgroundTransparency = 1
-	children.BorderSizePixel = 0
-	children.Visible = false
-	children.ScrollBarThickness = 2
-	children.ScrollBarImageTransparency = 0.75
-	children.CanvasSize = UDim2.new()
-	children.Parent = window
-	local childrentwo = Instance.new('Frame')
-	childrentwo.BackgroundTransparency = 1
-	childrentwo.BackgroundColor3 = color.Dark(uipallet.Main, 0.02)
-	childrentwo.Visible = false
-	childrentwo.Parent = children
-	local settings = Instance.new('ImageButton')
-	settings.Name = 'Settings'
-	settings.Size = UDim2.fromOffset(16, 16)
-	settings.Position = UDim2.new(1, -52, 0, 13)
-	settings.BackgroundTransparency = 1
-	settings.AutoButtonColor = false
-	settings.Image = getcustomasset('skidv5/assets/new/customsettings.png')
-	settings.ImageColor3 = color.Dark(uipallet.Text, 0.43)
-	settings.Parent = window
 	local divider = Instance.new('Frame')
-	divider.Name = 'Divider'
 	divider.Size = UDim2.new(1, 0, 0, 1)
-	divider.Position = UDim2.fromOffset(0, 41)
-	divider.BorderSizePixel = 0
-	divider.Visible = false
+	divider.Position = UDim2.fromOffset(0, 40)
 	divider.BackgroundColor3 = Color3.new(1, 1, 1)
-	divider.BackgroundTransparency = 0.928
+	divider.BackgroundTransparency = 0.93
+	divider.BorderSizePixel = 0
 	divider.Parent = window
-	local windowlist = Instance.new('UIListLayout')
-	windowlist.SortOrder = Enum.SortOrder.LayoutOrder
-	windowlist.HorizontalAlignment = Enum.HorizontalAlignment.Center
-	windowlist.Padding = UDim.new(0, 3)
-	windowlist.Parent = children
-	local windowlisttwo = Instance.new('UIListLayout')
-	windowlisttwo.SortOrder = Enum.SortOrder.LayoutOrder
-	windowlisttwo.HorizontalAlignment = Enum.HorizontalAlignment.Center
-	windowlisttwo.Parent = childrentwo
+	local windowlist = Instance.new('ScrollingFrame')
+	windowlist.Name = 'Children'
+	windowlist.Size = UDim2.new(1, 0, 1, -41)
+	windowlist.Position = UDim2.fromOffset(0, 41)
+	windowlist.BackgroundTransparency = 1
+	windowlist.BorderSizePixel = 0
+	windowlist.ScrollBarThickness = 2
+	windowlist.ScrollBarImageTransparency = 0.75
+	windowlist.AutomaticCanvasSize = Enum.AutomaticSize.Y
+	windowlist.CanvasSize = UDim2.fromOffset(0, 0)
+	windowlist.Parent = window
+	local listlayout = Instance.new('UIListLayout')
+	listlayout.SortOrder = Enum.SortOrder.LayoutOrder
+	listlayout.HorizontalAlignment = Enum.HorizontalAlignment.Center
+	listlayout.Padding = UDim.new(0, 3)
+	listlayout.Parent = windowlist
 	local addbkg = Instance.new('Frame')
 	addbkg.Name = 'Add'
-	addbkg.Size = UDim2.fromOffset(200, 31)
-	addbkg.Position = UDim2.fromOffset(10, 45)
+	addbkg.Size = UDim2.fromOffset(484, 31)
 	addbkg.BackgroundColor3 = color.Light(uipallet.Main, 0.02)
-	addbkg.Parent = children
+	addbkg.BorderSizePixel = 0
+	addbkg.LayoutOrder = 1
+	addbkg.Parent = windowlist
 	addCorner(addbkg)
-	local addbox = addbkg:Clone()
-	addbox.Size = UDim2.new(1, -2, 1, -2)
-	addbox.Position = UDim2.fromOffset(1, 1)
-	addbox.BackgroundColor3 = color.Dark(uipallet.Main, 0.02)
-	addbox.Parent = addbkg
 	local addvalue = Instance.new('TextBox')
-	addvalue.Size = UDim2.new(1, -35, 1, 0)
+	addvalue.Name = 'Value'
+	addvalue.Size = UDim2.new(1, -60, 1, 0)
 	addvalue.Position = UDim2.fromOffset(10, 0)
 	addvalue.BackgroundTransparency = 1
 	addvalue.Text = ''
 	addvalue.PlaceholderText = categorysettings.Placeholder or 'Add entry...'
-	addvalue.TextXAlignment = Enum.TextXAlignment.Left
-	addvalue.TextColor3 = Color3.new(1, 1, 1)
-	addvalue.TextSize = 15
+	addvalue.PlaceholderColor3 = color.Dark(uipallet.Text, 0.43)
+	addvalue.TextColor3 = color.Dark(uipallet.Text, 0.16)
+	addvalue.TextSize = 13
 	addvalue.FontFace = uipallet.Font
-	addvalue.ClearTextOnFocus = false
+	addvalue.TextXAlignment = Enum.TextXAlignment.Left
+	addvalue.ClearTextOnFocus = true
 	addvalue.Parent = addbkg
 	local addbutton = Instance.new('ImageButton')
 	addbutton.Name = 'AddButton'
 	addbutton.Size = UDim2.fromOffset(16, 16)
 	addbutton.Position = UDim2.new(1, -26, 0, 8)
 	addbutton.BackgroundTransparency = 1
+	addbutton.AutoButtonColor = false
 	addbutton.Image = getcustomasset('skidv5/assets/new/add.png')
 	addbutton.ImageColor3 = categorysettings.Color
 	addbutton.ImageTransparency = 0.3
 	addbutton.Parent = addbkg
-	local cursedpadding = Instance.new('Frame')
-	cursedpadding.Size = UDim2.fromOffset()
-	cursedpadding.BackgroundTransparency = 1
-	cursedpadding.Parent = children
+	categoryapi.Window = window
+	categoryapi.Object = window
+	categoryapi.Content = windowlist
+	categorysettings.Window = window
 	categorysettings.Function = categorysettings.Function or function() end
+
+	local function resize()
+		if mainapi.ThreadFix then
+			setthreadidentity(8)
+		end
+		local height = categoryapi.Expanded and windowlist.AbsoluteContentSize.Y / scale.Scale or 0
+		window.Size = UDim2.fromOffset(490, math.min(41 + height, 427))
+		windowlist.Size = UDim2.new(1, 0, 1, -41)
+	end
+	windowlist:GetPropertyChangedSignal('AbsoluteContentSize'):Connect(resize)
+
+	arrowbutton.MouseButton1Click:Connect(function()
+		categoryapi.Expanded = not categoryapi.Expanded
+		windowlist.Visible = categoryapi.Expanded
+		arrow.Rotation = categoryapi.Expanded and 180 or 0
+		resize()
+	end)
+
+	local function createItemRow(v, ind)
+		local profileitem = categorysettings.Profiles and v.Name or v
+		local object = Instance.new('TextButton')
+		object.Name = profileitem
+		object.Size = UDim2.fromOffset(484, 33)
+		object.BackgroundColor3 = color.Light(uipallet.Main, 0.02)
+		object.AutoButtonColor = false
+		object.Text = ''
+		object.LayoutOrder = ind + 1
+		object.Parent = windowlist
+		addCorner(object)
+		local dot = Instance.new('Frame')
+		dot.Name = 'Dot'
+		dot.Size = UDim2.fromOffset(10, 11)
+		dot.Position = UDim2.fromOffset(12, 11)
+		dot.BackgroundColor3 = color.Light(uipallet.Main, 0.37)
+		dot.BorderSizePixel = 0
+		dot.Parent = object
+		addCorner(dot, UDim.new(1, 0))
+		local objecttitle = Instance.new('TextLabel')
+		objecttitle.Name = 'Title'
+		objecttitle.Size = UDim2.new(1, -70, 1, 0)
+		objecttitle.Position = UDim2.fromOffset(32, 0)
+		objecttitle.BackgroundTransparency = 1
+		objecttitle.Text = profileitem
+		objecttitle.TextXAlignment = Enum.TextXAlignment.Left
+		objecttitle.TextColor3 = color.Dark(uipallet.Text, 0.4)
+		objecttitle.TextSize = 14
+		objecttitle.FontFace = uipallet.Font
+		objecttitle.Parent = object
+		local dotsbutton = Instance.new('TextButton')
+		dotsbutton.Name = 'Dots'
+		dotsbutton.Size = UDim2.fromOffset(25, 33)
+		dotsbutton.Position = UDim2.new(1, -25, 0, 0)
+		dotsbutton.BackgroundTransparency = 1
+		dotsbutton.Text = ''
+		dotsbutton.Parent = object
+		local dots = Instance.new('ImageLabel')
+		dots.Name = 'Dots'
+		dots.Size = UDim2.fromOffset(3, 16)
+		dots.Position = UDim2.fromOffset(11, 9)
+		dots.BackgroundTransparency = 1
+		dots.Image = getcustomasset('skidv5/assets/new/dots.png')
+		dots.ImageColor3 = color.Light(uipallet.Main, 0.37)
+		dots.Parent = dotsbutton
+		local bind
+		local itemapi = {
+			Name = profileitem,
+			Enabled = table.find(categoryapi.ListEnabled, profileitem) ~= nil,
+			Object = object
+		}
+		local function restyle()
+			local enabled = itemapi.Enabled
+			dot.BackgroundColor3 = enabled and categorysettings.Color or color.Light(uipallet.Main, 0.37)
+			objecttitle.TextColor3 = enabled and color.Dark(uipallet.Text, 0.16) or color.Dark(uipallet.Text, 0.4)
+		end
+		if categorysettings.Profiles then
+			bind = Instance.new('TextButton')
+			bind.Name = 'Bind'
+			bind.Size = UDim2.fromOffset(20, 20)
+			bind.Position = UDim2.new(1, -30, 0.5, 0)
+			bind.AnchorPoint = Vector2.new(1, 0.5)
+			bind.BackgroundColor3 = Color3.new(1, 1, 1)
+			bind.BackgroundTransparency = 0.94
+			bind.BorderSizePixel = 0
+			bind.AutoButtonColor = false
+			bind.Text = ''
+			bind.Visible = false
+			bind.Parent = object
+			addCorner(bind, UDim.new(0, 4))
+			local bindicon = Instance.new('ImageLabel')
+			bindicon.Name = 'Icon'
+			bindicon.Size = UDim2.fromOffset(10, 10)
+			bindicon.Position = UDim2.fromOffset(5, 5)
+			bindicon.BackgroundTransparency = 1
+			bindicon.Image = getcustomasset('skidv5/assets/new/bind.png')
+			bindicon.ImageColor3 = color.Dark(uipallet.Text, 0.43)
+			bindicon.Parent = bind
+			local bindtext = Instance.new('TextLabel')
+			bindtext.Name = 'TextLabel'
+			bindtext.Size = UDim2.fromScale(1, 1)
+			bindtext.Position = UDim2.fromOffset(0, 1)
+			bindtext.BackgroundTransparency = 1
+			bindtext.Visible = false
+			bindtext.Text = ''
+			bindtext.TextColor3 = color.Dark(uipallet.Text, 0.43)
+			bindtext.TextSize = 9
+			bindtext.FontFace = uipallet.FontSemiBold
+			bindtext.Parent = bind
+			local function setBind(tab, mouse)
+				v.Bind = table.clone(tab)
+				bindtext.Text = table.concat(v.Bind, ' + '):upper()
+				bindtext.Visible = #v.Bind > 0
+				bindicon.Visible = not bindtext.Visible
+				bind.Size = UDim2.fromOffset(math.max(getfontsize(bindtext.Text, 9, uipallet.Font).X + 14, 20), 20)
+				bind.Visible = #v.Bind > 0
+			end
+			setBind(v.Bind)
+			bind.MouseButton1Click:Connect(function()
+				mainapi.Binding = {SetBind = setBind, Bind = v.Bind}
+			end)
+			if profileitem == mainapi.Profile then
+				categoryapi.Selected = itemapi
+			end
+		end
+		object.MouseButton1Click:Connect(function()
+			if categorysettings.Profiles then
+				if profileitem ~= mainapi.Profile then
+					mainapi:SetProfile(profileitem)
+				end
+			else
+				local ind = table.find(categoryapi.ListEnabled, profileitem)
+				if ind then
+					table.remove(categoryapi.ListEnabled, ind)
+				else
+					table.insert(categoryapi.ListEnabled, profileitem)
+				end
+				itemapi.Enabled = ind == nil
+				restyle()
+				categorysettings.Function()
+			end
+		end)
+		dotsbutton.MouseButton1Click:Connect(function()
+			categoryapi:ChangeValue(profileitem)
+		end)
+		object.MouseEnter:Connect(function()
+			object.BackgroundColor3 = color.Light(uipallet.Main, 0.04)
+			if bind then
+				bind.Visible = true
+			end
+		end)
+		object.MouseLeave:Connect(function()
+			object.BackgroundColor3 = color.Light(uipallet.Main, 0.02)
+			if bind then
+				bind.Visible = #v.Bind > 0
+			end
+		end)
+		restyle()
+		table.insert(categoryapi.Objects, object)
+	end
 
 	function categoryapi:ChangeValue(val)
 		if val then
 			if categorysettings.Profiles then
-				local ind = self:GetValue(val)
+				local ind
+				for i, p in mainapi.Profiles do
+					if p.Name == val then
+						ind = i
+						break
+					end
+				end
 				if ind then
 					if val ~= 'default' then
 						table.remove(mainapi.Profiles, ind)
@@ -4498,1292 +2834,1733 @@ function mainapi:CreateCategoryList(categorysettings)
 				end
 			end
 		end
-
 		categorysettings.Function()
 		for _, v in self.Objects do
-			v:Destroy()
+			pcall(v.Destroy, v)
 		end
 		table.clear(self.Objects)
 		self.Selected = nil
-
 		for i, v in (categorysettings.Profiles and mainapi.Profiles or self.List) do
-			if categorysettings.Profiles then
-				local object = Instance.new('TextButton')
-				object.Name = v.Name
-				object.Size = UDim2.fromOffset(200, 33)
-				object.BackgroundColor3 = color.Light(uipallet.Main, 0.02)
-				object.AutoButtonColor = false
-				object.Text = ''
-				object.Parent = children
-				addCorner(object)
-				local objectstroke = Instance.new('UIStroke')
-				objectstroke.Color = color.Light(uipallet.Main, 0.1)
-				objectstroke.ApplyStrokeMode = Enum.ApplyStrokeMode.Border
-				objectstroke.Enabled = false
-				objectstroke.Parent = object
-				local objecttitle = Instance.new('TextLabel')
-				objecttitle.Name = 'Title'
-				objecttitle.Size = UDim2.new(1, -10, 1, 0)
-				objecttitle.Position = UDim2.fromOffset(10, 0)
-				objecttitle.BackgroundTransparency = 1
-				objecttitle.Text = v.Name
-				objecttitle.TextXAlignment = Enum.TextXAlignment.Left
-				objecttitle.TextColor3 = color.Dark(uipallet.Text, 0.4)
-				objecttitle.TextSize = 15
-				objecttitle.FontFace = uipallet.Font
-				objecttitle.Parent = object
-				local dotsbutton = Instance.new('TextButton')
-				dotsbutton.Name = 'Dots'
-				dotsbutton.Size = UDim2.fromOffset(25, 33)
-				dotsbutton.Position = UDim2.new(1, -25, 0, 0)
-				dotsbutton.BackgroundTransparency = 1
-				dotsbutton.Text = ''
-				dotsbutton.Parent = object
-				local dots = Instance.new('ImageLabel')
-				dots.Name = 'Dots'
-				dots.Size = UDim2.fromOffset(3, 16)
-				dots.Position = UDim2.fromOffset(10, 9)
-				dots.BackgroundTransparency = 1
-				dots.Image = getcustomasset('skidv5/assets/new/dots.png')
-				dots.ImageColor3 = color.Light(uipallet.Main, 0.37)
-				dots.Parent = dotsbutton
-				local bind = Instance.new('TextButton')
-				addTooltip(bind, 'Click to bind')
-				bind.Name = 'Bind'
-				bind.Size = UDim2.fromOffset(20, 21)
-				bind.Position = UDim2.new(1, -30, 0, 6)
-				bind.AnchorPoint = Vector2.new(1, 0)
-				bind.BackgroundColor3 = Color3.new(1, 1, 1)
-				bind.BackgroundTransparency = 0.92
-				bind.BorderSizePixel = 0
-				bind.AutoButtonColor = false
-				bind.Visible = false
-				bind.Text = ''
-				addCorner(bind, UDim.new(0, 4))
-				local bindicon = Instance.new('ImageLabel')
-				bindicon.Name = 'Icon'
-				bindicon.Size = UDim2.fromOffset(12, 12)
-				bindicon.Position = UDim2.new(0.5, -6, 0, 5)
-				bindicon.BackgroundTransparency = 1
-				bindicon.Image = getcustomasset('skidv5/assets/new/bind.png')
-				bindicon.ImageColor3 = color.Dark(uipallet.Text, 0.43)
-				bindicon.Parent = bind
-				local bindtext = Instance.new('TextLabel')
-				bindtext.Size = UDim2.fromScale(1, 1)
-				bindtext.Position = UDim2.fromOffset(0, 1)
-				bindtext.BackgroundTransparency = 1
-				bindtext.Visible = false
-				bindtext.Text = ''
-				bindtext.TextColor3 = color.Dark(uipallet.Text, 0.43)
-				bindtext.TextSize = 12
-				bindtext.FontFace = uipallet.Font
-				bindtext.Parent = bind
-				bind.MouseEnter:Connect(function()
-					if mainapi.ThreadFix then
-						setthreadidentity(8)
-					end
-					bindtext.Visible = false
-					bindicon.Visible = not bindtext.Visible
-					bindicon.Image = getcustomasset('skidv5/assets/new/edit.png')
-					if v.Name ~= mainapi.Profile then
-						bindicon.ImageColor3 = color.Dark(uipallet.Text, 0.16)
-					end
-				end)
-				bind.MouseLeave:Connect(function()
-					if mainapi.ThreadFix then
-						setthreadidentity(8)
-					end
-					bindtext.Visible = #v.Bind > 0
-					bindicon.Visible = not bindtext.Visible
-					bindicon.Image = getcustomasset('skidv5/assets/new/bind.png')
-					if v.Name ~= mainapi.Profile then
-						bindicon.ImageColor3 = color.Dark(uipallet.Text, 0.43)
-					end
-				end)
-				local bindcover = Instance.new('ImageLabel')
-				bindcover.Name = 'Cover'
-				bindcover.Size = UDim2.fromOffset(154, 33)
-				bindcover.BackgroundTransparency = 1
-				bindcover.Visible = false
-				bindcover.Image = getcustomasset('skidv5/assets/new/bindbkg.png')
-				bindcover.ScaleType = Enum.ScaleType.Slice
-				bindcover.SliceCenter = Rect.new(0, 0, 141, 40)
-				bindcover.Parent = object
-				local bindcovertext = Instance.new('TextLabel')
-				bindcovertext.Name = 'Text'
-				bindcovertext.Size = UDim2.new(1, -10, 1, -3)
-				bindcovertext.BackgroundTransparency = 1
-				bindcovertext.Text = 'PRESS A KEY TO BIND'
-				bindcovertext.TextColor3 = uipallet.Text
-				bindcovertext.TextSize = 11
-				bindcovertext.FontFace = uipallet.Font
-				bindcovertext.Parent = bindcover
-				bind.Parent = object
-				dotsbutton.MouseEnter:Connect(function()
-					if mainapi.ThreadFix then
-						setthreadidentity(8)
-					end
-					if v.Name ~= mainapi.Profile then
-						dots.ImageColor3 = uipallet.Text
-					end
-				end)
-				dotsbutton.MouseLeave:Connect(function()
-					if mainapi.ThreadFix then
-						setthreadidentity(8)
-					end
-					if v.Name ~= mainapi.Profile then
-						dots.ImageColor3 = color.Light(uipallet.Main, 0.37)
-					end
-				end)
-				dotsbutton.MouseButton1Click:Connect(function()
-					if v.Name ~= mainapi.Profile then
-						categoryapi:ChangeValue(v.Name)
-					end
-				end)
-				object.MouseButton1Click:Connect(function()
-					mainapi:SetProfile(v.Name)
-				end)
-				object.MouseEnter:Connect(function()
-					if mainapi.ThreadFix then
-						setthreadidentity(8)
-					end
-					bind.Visible = true
-					if v.Name ~= mainapi.Profile then
-						objectstroke.Enabled = true
-						objecttitle.TextColor3 = color.Dark(uipallet.Text, 0.16)
-					end
-				end)
-				object.MouseLeave:Connect(function()
-					if mainapi.ThreadFix then
-						setthreadidentity(8)
-					end
-					bind.Visible = #v.Bind > 0
-					if v.Name ~= mainapi.Profile then
-						objectstroke.Enabled = false
-						objecttitle.TextColor3 = color.Dark(uipallet.Text, 0.4)
-					end
-				end)
-
-				local function bindFunction(self, tab, mouse)
-					v.Bind = table.clone(tab)
-					if mouse then
-						bindcovertext.Text = #tab <= 0 and 'BIND REMOVED' or 'BOUND TO '..table.concat(tab, ' + '):upper()
-						bindcover.Size = UDim2.fromOffset(getfontsize(bindcovertext.Text, bindcovertext.TextSize).X + 20, 40)
-						task.delay(1, function()
-							bindcover.Visible = false
-						end)
-					end
-
-					if #tab <= 0 then
-						bindtext.Visible = false
-						bindicon.Visible = true
-						bind.Size = UDim2.fromOffset(20, 21)
-					else
-						bind.Visible = true
-						bindtext.Visible = true
-						bindicon.Visible = false
-						bindtext.Text = table.concat(tab, ' + '):upper()
-						bind.Size = UDim2.fromOffset(math.max(getfontsize(bindtext.Text, bindtext.TextSize, bindtext.Font).X + 10, 20), 21)
-					end
-				end
-
-				bindFunction({}, v.Bind)
-				bind.MouseButton1Click:Connect(function()
-					bindcovertext.Text = 'PRESS A KEY TO BIND'
-					bindcover.Size = UDim2.fromOffset(getfontsize(bindcovertext.Text, bindcovertext.TextSize).X + 20, 40)
-					bindcover.Visible = true
-					mainapi.Binding = {SetBind = bindFunction, Bind = v.Bind}
-				end)
-				if v.Name == mainapi.Profile then
-					self.Selected = object
-				end
-				table.insert(self.Objects, object)
-			else
-				local enabled = table.find(self.ListEnabled, v)
-				local object = Instance.new('TextButton')
-				object.Name = v
-				object.Size = UDim2.fromOffset(200, 32)
-				object.BackgroundColor3 = color.Light(uipallet.Main, 0.02)
-				object.AutoButtonColor = false
-				object.Text = ''
-				object.Parent = children
-				addCorner(object)
-				local objectbkg = Instance.new('Frame')
-				objectbkg.Name = 'BKG'
-				objectbkg.Size = UDim2.new(1, -2, 1, -2)
-				objectbkg.Position = UDim2.fromOffset(1, 1)
-				objectbkg.BackgroundColor3 = uipallet.Main
-				objectbkg.Visible = false
-				objectbkg.Parent = object
-				addCorner(objectbkg)
-				local objectdot = Instance.new('Frame')
-				objectdot.Name = 'Dot'
-				objectdot.Size = UDim2.fromOffset(10, 11)
-				objectdot.Position = UDim2.fromOffset(10, 12)
-				objectdot.BackgroundColor3 = enabled and categorysettings.Color or color.Light(uipallet.Main, 0.37)
-				objectdot.Parent = object
-				addCorner(objectdot, UDim.new(1, 0))
-				local objectdotin = objectdot:Clone()
-				objectdotin.Size = UDim2.fromOffset(8, 9)
-				objectdotin.Position = UDim2.fromOffset(1, 1)
-				objectdotin.BackgroundColor3 = enabled and categorysettings.Color or color.Light(uipallet.Main, 0.02)
-				objectdotin.Parent = objectdot
-				local objecttitle = Instance.new('TextLabel')
-				objecttitle.Name = 'Title'
-				objecttitle.Size = UDim2.new(1, -30, 1, 0)
-				objecttitle.Position = UDim2.fromOffset(30, 0)
-				objecttitle.BackgroundTransparency = 1
-				objecttitle.Text = v
-				objecttitle.TextXAlignment = Enum.TextXAlignment.Left
-				objecttitle.TextColor3 = color.Dark(uipallet.Text, 0.16)
-				objecttitle.TextSize = 15
-				objecttitle.FontFace = uipallet.Font
-				objecttitle.Parent = object
-				if mainapi.ThreadFix then
-					setthreadidentity(8)
-				end
-				local close = Instance.new('ImageButton')
-				close.Name = 'Close'
-				close.Size = UDim2.fromOffset(16, 16)
-				close.Position = UDim2.new(1, -23, 0, 8)
-				close.BackgroundColor3 = Color3.new(1, 1, 1)
-				close.BackgroundTransparency = 1
-				close.AutoButtonColor = false
-				close.Image = getcustomasset('skidv5/assets/new/closemini.png')
-				close.ImageColor3 = color.Light(uipallet.Text, 0.2)
-				close.ImageTransparency = 0.5
-				close.Parent = object
-				addCorner(close, UDim.new(1, 0))
-				close.MouseEnter:Connect(function()
-					close.ImageTransparency = 0.3
-					tween:Tween(close, uipallet.Tween, {
-						BackgroundTransparency = 0.6
-					})
-				end)
-				close.MouseLeave:Connect(function()
-					close.ImageTransparency = 0.5
-					tween:Tween(close, uipallet.Tween, {
-						BackgroundTransparency = 1
-					})
-				end)
-				close.MouseButton1Click:Connect(function()
-					categoryapi:ChangeValue(v)
-				end)
-				object.MouseEnter:Connect(function()
-					objectbkg.Visible = true
-				end)
-				object.MouseLeave:Connect(function()
-					objectbkg.Visible = false
-				end)
-				object.MouseButton1Click:Connect(function()
-					local ind = table.find(self.ListEnabled, v)
-					if ind then
-						table.remove(self.ListEnabled, ind)
-						objectdot.BackgroundColor3 = color.Light(uipallet.Main, 0.37)
-						objectdotin.BackgroundColor3 = color.Light(uipallet.Main, 0.02)
-					else
-						table.insert(self.ListEnabled, v)
-						objectdot.BackgroundColor3 = categorysettings.Color
-						objectdotin.BackgroundColor3 = categorysettings.Color
-					end
-					categorysettings.Function()
-				end)
-				table.insert(self.Objects, object)
-			end
+			createItemRow(v.Name or v, i)
 		end
-		mainapi:UpdateGUI(mainapi.GUIColor.Hue, mainapi.GUIColor.Sat, mainapi.GUIColor.Value)
-	end
-
-	function categoryapi:Expand()
-		self.Expanded = not self.Expanded
-		children.Visible = self.Expanded
-		arrow.Rotation = self.Expanded and 0 or 180
-		window.Size = UDim2.fromOffset(220, self.Expanded and math.min(51 + windowlist.AbsoluteContentSize.Y / scale.Scale, 611) or 45)
-		divider.Visible = children.CanvasPosition.Y > 10 and children.Visible
-	end
-
-	function categoryapi:GetValue(name)
-		for i, v in mainapi.Profiles do
-			if v.Name == name then
-				return i
-			end
+		if categoryapi.Update then
+			categoryapi.Update:Fire()
+		end
+		if categoryapi.ColorUpdate then
+			categoryapi.ColorUpdate:Fire()
 		end
 	end
 
-	for i, v in components do
-		categoryapi['Create'..i] = function(self, optionsettings)
-			return v(optionsettings, childrentwo, categoryapi)
-		end
-	end
-
-	addbutton.MouseEnter:Connect(function()
-		addbutton.ImageTransparency = 0
-	end)
-	addbutton.MouseLeave:Connect(function()
-		addbutton.ImageTransparency = 0.3
-	end)
 	addbutton.MouseButton1Click:Connect(function()
-		if not table.find(categoryapi.List, addvalue.Text) then
+		if addvalue.Text ~= '' then
 			categoryapi:ChangeValue(addvalue.Text)
 			addvalue.Text = ''
 		end
-	end)
-	arrowbutton.MouseEnter:Connect(function()
-		arrow.ImageColor3 = Color3.fromRGB(220, 220, 220)
-	end)
-	arrowbutton.MouseLeave:Connect(function()
-		arrow.ImageColor3 = Color3.fromRGB(140, 140, 140)
-	end)
-	arrowbutton.MouseButton1Click:Connect(function()
-		categoryapi:Expand()
-	end)
-	arrowbutton.MouseButton2Click:Connect(function()
-		categoryapi:Expand()
 	end)
 	addvalue.FocusLost:Connect(function(enter)
-		if enter and not table.find(categoryapi.List, addvalue.Text) then
+		if enter and addvalue.Text ~= '' then
 			categoryapi:ChangeValue(addvalue.Text)
 			addvalue.Text = ''
 		end
 	end)
-	addvalue.MouseEnter:Connect(function()
-		tween:Tween(addbkg, uipallet.Tween, {
-			BackgroundColor3 = color.Light(uipallet.Main, 0.14)
-		})
-	end)
-	addvalue.MouseLeave:Connect(function()
-		tween:Tween(addbkg, uipallet.Tween, {
-			BackgroundColor3 = color.Light(uipallet.Main, 0.02)
-		})
-	end)
-	children:GetPropertyChangedSignal('CanvasPosition'):Connect(function()
-		divider.Visible = children.CanvasPosition.Y > 10 and children.Visible
-	end)
-	settings.MouseEnter:Connect(function()
-		settings.ImageColor3 = uipallet.Text
-	end)
-	settings.MouseLeave:Connect(function()
-		settings.ImageColor3 = color.Light(uipallet.Main, 0.37)
-	end)
-	settings.MouseButton1Click:Connect(function()
-		childrentwo.Visible = not childrentwo.Visible
-	end)
-	window.InputBegan:Connect(function(inputObj)
-		if inputObj.Position.Y < window.AbsolutePosition.Y + 41 and inputObj.UserInputType == Enum.UserInputType.MouseButton2 then
-			categoryapi:Expand()
-		end
-	end)
-	windowlist:GetPropertyChangedSignal('AbsoluteContentSize'):Connect(function()
-		if self.ThreadFix then
-			setthreadidentity(8)
-		end
-		children.CanvasSize = UDim2.fromOffset(0, windowlist.AbsoluteContentSize.Y / scale.Scale)
-		if categoryapi.Expanded then
-			window.Size = UDim2.fromOffset(220, math.min(51 + windowlist.AbsoluteContentSize.Y / scale.Scale, 611))
-		end
-	end)
-	windowlisttwo:GetPropertyChangedSignal('AbsoluteContentSize'):Connect(function()
-		if self.ThreadFix then
-			setthreadidentity(8)
-		end
-		childrentwo.Size = UDim2.fromOffset(220, windowlisttwo.AbsoluteContentSize.Y)
-	end)
 
-	categoryapi.Button = self.Categories.Main:CreateButton({
-		Name = categorysettings.Name,
-		Icon = categorysettings.CategoryIcon,
-		Size = categorysettings.CategorySize,
-		Window = window
-	})
+	for name, comp in components do
+		if name ~= 'Divider' then
+			categoryapi['Create'..name] = function(settings)
+				return comp(windowlist, settings, categoryapi)
+			end
+		end
+	end
 
-	categoryapi.Object = window
-	self.Categories[categorysettings.Name] = categoryapi
+	function categoryapi:CreateDivider(text)
+		return components.Divider(windowlist, text)
+	end
+
+	categoryapi.Update = Instance.new('BindableEvent')
+	categoryapi.ColorUpdate = Instance.new('BindableEvent')
+	mainapi.Categories[categorysettings.Name] = categoryapi
+	table.insert(mainapi.Windows, window)
+	addMaid(categoryapi)
 
 	return categoryapi
 end
 
-function mainapi:CreateSearch()
+function mainapi:CreateGUI()
+	local categoryapi = {
+		Type = 'Category',
+		Expanded = false,
+		Options = {},
+		Buttons = {},
+		Name = 'Main'
+	}
+	clickgui = Instance.new('Frame')
+	clickgui.Name = 'ClickGui'
+	clickgui.Size = UDim2.fromOffset(660, 520)
+	clickgui.Position = UDim2.fromScale(0.5, 0.5)
+	clickgui.AnchorPoint = Vector2.new(0.5, 0.5)
+	clickgui.BackgroundColor3 = uipallet.Main
+	clickgui.BorderSizePixel = 0
+	clickgui.Visible = false
+	clickgui.Parent = scaledgui
+	addBlur(clickgui)
+	addCorner(clickgui, UDim.new(0, 8))
+	local mainstroke = Instance.new('UIStroke')
+	mainstroke.Color = Color3.new(1, 1, 1)
+	mainstroke.Transparency = 0.9
+	mainstroke.ApplyStrokeMode = Enum.ApplyStrokeMode.Border
+	mainstroke.Parent = clickgui
+	local header = Instance.new('Frame')
+	header.Name = 'Header'
+	header.Size = UDim2.new(1, 0, 0, 44)
+	header.BackgroundColor3 = color.Dark(uipallet.Main, 0.03)
+	header.BorderSizePixel = 0
+	header.Parent = clickgui
+	addCorner(header, UDim.new(0, 8))
+	local headertitle = Instance.new('TextLabel')
+	headertitle.Name = 'Title'
+	headertitle.Size = UDim2.fromOffset(250, 44)
+	headertitle.Position = UDim2.fromOffset(12, 0)
+	headertitle.BackgroundTransparency = 1
+	headertitle.Text = 'SKIDV5 LITE'
+	headertitle.TextXAlignment = Enum.TextXAlignment.Left
+	headertitle.TextColor3 = color.Dark(uipallet.Text, 0.16)
+	headertitle.TextSize = 15
+	headertitle.FontFace = uipallet.FontSemiBold
+	headertitle.Parent = header
+	local version = Instance.new('TextLabel')
+	version.Name = 'Version'
+	version.Size = UDim2.fromOffset(80, 44)
+	version.Position = UDim2.new(1, -160, 0, 0)
+	version.AnchorPoint = Vector2.new(1, 0)
+	version.BackgroundTransparency = 1
+	version.Text = 'v'..mainapi.Version
+	version.TextXAlignment = Enum.TextXAlignment.Right
+	version.TextColor3 = color.Dark(uipallet.Text, 0.43)
+	version.TextSize = 11
+	version.FontFace = uipallet.Font
+	version.Parent = header
+	local settingsbutton = Instance.new('ImageButton')
+	settingsbutton.Name = 'Settings'
+	settingsbutton.Size = UDim2.fromOffset(16, 16)
+	settingsbutton.Position = UDim2.new(1, -70, 0, 14)
+	settingsbutton.BackgroundTransparency = 1
+	settingsbutton.AutoButtonColor = false
+	settingsbutton.Image = getcustomasset('skidv5/assets/new/guisettings.png')
+	settingsbutton.ImageColor3 = color.Light(uipallet.Main, 0.37)
+	settingsbutton.Parent = header
+	local close = addCloseButton(header, 10)
+	close.MouseButton1Click:Connect(function()
+		clickgui.Visible = false
+		mainapi:BlurCheck()
+	end)
+	makeDraggable(clickgui, header)
+	local sidebar = Instance.new('Frame')
+	sidebar.Name = 'Sidebar'
+	sidebar.Size = UDim2.fromOffset(170, 476)
+	sidebar.Position = UDim2.fromOffset(0, 44)
+	sidebar.BackgroundColor3 = color.Dark(uipallet.Main, 0.04)
+	sidebar.BorderSizePixel = 0
+	sidebar.Parent = clickgui
+	addCorner(sidebar, UDim.new(0, 8))
+	sidebarlist = Instance.new('ScrollingFrame')
+	sidebarlist.Name = 'List'
+	sidebarlist.Size = UDim2.fromOffset(170, 430)
+	sidebarlist.Position = UDim2.fromOffset(0, 6)
+	sidebarlist.BackgroundTransparency = 1
+	sidebarlist.BorderSizePixel = 0
+	sidebarlist.ScrollBarThickness = 2
+	sidebarlist.ScrollBarImageTransparency = 0.75
+	sidebarlist.AutomaticCanvasSize = Enum.AutomaticSize.Y
+	sidebarlist.CanvasSize = UDim2.fromOffset(0, 0)
+	sidebarlist.Parent = sidebar
+	local sidebarlayout = Instance.new('UIListLayout')
+	sidebarlayout.SortOrder = Enum.SortOrder.LayoutOrder
+	sidebarlayout.HorizontalAlignment = Enum.HorizontalAlignment.Center
+	sidebarlayout.Padding = UDim.new(0, 4)
+	sidebarlayout.Parent = sidebarlist
+	local sidebarversion = Instance.new('TextLabel')
+	sidebarversion.Size = UDim2.new(1, 0, 0, 20)
+	sidebarversion.Position = UDim2.fromOffset(0, 452)
+	sidebarversion.BackgroundTransparency = 1
+	sidebarversion.Text = 'SKIDV5 LITE v'..mainapi.Version
+	sidebarversion.TextColor3 = color.Dark(uipallet.Text, 0.43)
+	sidebarversion.TextSize = 10
+	sidebarversion.FontFace = uipallet.Font
+	sidebarversion.Parent = sidebar
+	local search = Instance.new('Frame')
+	search.Name = 'Search'
+	search.Size = UDim2.fromOffset(490, 49)
+	search.Position = UDim2.fromOffset(170, 44)
+	search.BackgroundTransparency = 1
+	search.BorderSizePixel = 0
+	search.Parent = clickgui
 	local searchbkg = Instance.new('Frame')
-	searchbkg.Name = 'Search'
-	searchbkg.Size = UDim2.fromOffset(220, 37)
-	searchbkg.Position = UDim2.new(0.5, 0, 0, 13)
-	searchbkg.AnchorPoint = Vector2.new(0.5, 0)
-	searchbkg.BackgroundColor3 = color.Dark(uipallet.Main, 0.02)
-	searchbkg.Parent = clickgui
+	searchbkg.Name = 'Background'
+	searchbkg.Size = UDim2.fromOffset(474, 37)
+	searchbkg.Position = UDim2.fromOffset(8, 6)
+	searchbkg.BackgroundColor3 = color.Light(uipallet.Main, 0.02)
+	searchbkg.BorderSizePixel = 0
+	searchbkg.Parent = search
+	addCorner(searchbkg, UDim.new(0, 6))
 	local searchicon = Instance.new('ImageLabel')
 	searchicon.Name = 'Icon'
 	searchicon.Size = UDim2.fromOffset(14, 14)
-	searchicon.Position = UDim2.new(1, -23, 0, 11)
+	searchicon.Position = UDim2.fromOffset(14, 11)
 	searchicon.BackgroundTransparency = 1
 	searchicon.Image = getcustomasset('skidv5/assets/new/search.png')
-	searchicon.ImageColor3 = color.Light(uipallet.Main, 0.37)
+	searchicon.ImageColor3 = color.Dark(uipallet.Text, 0.43)
 	searchicon.Parent = searchbkg
-	local legiticon = Instance.new('ImageButton')
-	legiticon.Name = 'Legit'
-	legiticon.Size = UDim2.fromOffset(29, 16)
-	legiticon.Position = UDim2.fromOffset(8, 11)
-	legiticon.BackgroundTransparency = 1
-	legiticon.Image = getcustomasset('skidv5/assets/new/legit.png')
-	legiticon.Parent = searchbkg
+	local searchbox = Instance.new('TextBox')
+	searchbox.Name = 'TextBox'
+	searchbox.Size = UDim2.new(1, -44, 1, 0)
+	searchbox.Position = UDim2.fromOffset(36, 0)
+	searchbox.BackgroundTransparency = 1
+	searchbox.Text = ''
+	searchbox.PlaceholderText = 'Search modules...'
+	searchbox.PlaceholderColor3 = color.Dark(uipallet.Text, 0.43)
+	searchbox.TextColor3 = color.Dark(uipallet.Text, 0.16)
+	searchbox.TextSize = 13
+	searchbox.FontFace = uipallet.Font
+	searchbox.TextXAlignment = Enum.TextXAlignment.Left
+	searchbox.ClearTextOnFocus = false
+	searchbox.Size = UDim2.new(1, -86, 1, 0)
+	searchbox.Parent = searchbkg
+	searchbkg.ZIndex = 2
 	local legitdivider = Instance.new('Frame')
 	legitdivider.Name = 'LegitDivider'
 	legitdivider.Size = UDim2.fromOffset(2, 12)
-	legitdivider.Position = UDim2.fromOffset(43, 13)
-	legitdivider.BackgroundColor3 = color.Light(uipallet.Main, 0.14)
+	legitdivider.Position = UDim2.new(1, -40, 0.5, 0)
+	legitdivider.AnchorPoint = Vector2.new(1, 0.5)
+	legitdivider.BackgroundColor3 = color.Light(uipallet.Main, 0.11)
 	legitdivider.BorderSizePixel = 0
 	legitdivider.Parent = searchbkg
-	addBlur(searchbkg)
-	addCorner(searchbkg)
-	local search = Instance.new('TextBox')
-	search.Size = UDim2.new(1, -50, 0, 37)
-	search.Position = UDim2.fromOffset(50, 0)
-	search.BackgroundTransparency = 1
-	search.Text = ''
-	search.PlaceholderText = ''
-	search.TextXAlignment = Enum.TextXAlignment.Left
-	search.TextColor3 = uipallet.Text
-	search.TextSize = 12
-	search.FontFace = uipallet.Font
-	search.ClearTextOnFocus = false
-	search.Parent = searchbkg
-	local children = Instance.new('ScrollingFrame')
-	children.Name = 'Children'
-	children.Size = UDim2.new(1, 0, 1, -37)
-	children.Position = UDim2.fromOffset(0, 34)
-	children.BackgroundTransparency = 1
-	children.BorderSizePixel = 0
-	children.ScrollBarThickness = 2
-	children.ScrollBarImageTransparency = 0.75
-	children.CanvasSize = UDim2.new()
-	children.Parent = searchbkg
-	local divider = Instance.new('Frame')
-	divider.Name = 'Divider'
-	divider.Size = UDim2.new(1, 0, 0, 1)
-	divider.Position = UDim2.fromOffset(0, 33)
-	divider.BackgroundColor3 = Color3.new(1, 1, 1)
-	divider.BackgroundTransparency = 0.928
-	divider.BorderSizePixel = 0
-	divider.Visible = false
-	divider.Parent = searchbkg
-	local windowlist = Instance.new('UIListLayout')
-	windowlist.SortOrder = Enum.SortOrder.LayoutOrder
-	windowlist.HorizontalAlignment = Enum.HorizontalAlignment.Center
-	windowlist.Parent = children
-
-	children:GetPropertyChangedSignal('CanvasPosition'):Connect(function()
-		divider.Visible = children.CanvasPosition.Y > 10 and children.Visible
-	end)
-	legiticon.MouseButton1Click:Connect(function()
+	local searchlegit = Instance.new('ImageButton')
+	searchlegit.Name = 'Legit'
+	searchlegit.Size = UDim2.fromOffset(29, 16)
+	searchlegit.Position = UDim2.new(1, -34, 0.5, 0)
+	searchlegit.AnchorPoint = Vector2.new(1, 0.5)
+	searchlegit.BackgroundTransparency = 1
+	searchlegit.Image = getcustomasset('skidv5/assets/new/legit.png')
+	searchlegit.ImageColor3 = color.Dark(uipallet.Text, 0.43)
+	searchlegit.Parent = searchbkg
+	addTooltip(searchlegit, 'Open Legit mode')
+	if mainapi.Legit then
+		mainapi.Legit.Icon = searchlegit
+	end
+	searchlegit.MouseButton1Click:Connect(function()
 		clickgui.Visible = false
-		self.Legit.Window.Visible = true
-		self.Legit.Window.Position = UDim2.new(0.5, -350, 0.5, -194)
+		mainapi:BlurCheck()
+		mainapi.Legit.Window.Visible = true
+		mainapi.Legit.Window.Position = UDim2.fromScale(0.5, 0.5)
+		mainapi.Legit.Window.AnchorPoint = Vector2.new(0.5, 0.5)
 	end)
-	search:GetPropertyChangedSignal('Text'):Connect(function()
-		for _, v in children:GetChildren() do
-			if v:IsA('TextButton') then
+	local searchresults = Instance.new('ScrollingFrame')
+	searchresults.Name = 'Results'
+	searchresults.Size = UDim2.new(1, -16, 0, 0)
+	searchresults.Position = UDim2.fromOffset(8, 44)
+	searchresults.BackgroundTransparency = 1
+	searchresults.BorderSizePixel = 0
+	searchresults.ScrollBarThickness = 2
+	searchresults.ScrollBarImageTransparency = 0.75
+	searchresults.AutomaticCanvasSize = Enum.AutomaticSize.Y
+	searchresults.CanvasSize = UDim2.fromOffset(0, 0)
+	searchresults.Visible = false
+	searchresults.Parent = searchbkg
+	local searchlayout = Instance.new('UIListLayout')
+	searchlayout.SortOrder = Enum.SortOrder.LayoutOrder
+	searchlayout.Padding = UDim.new(0, 2)
+	searchlayout.Parent = searchresults
+	local function createSearchResult(moduleapi)
+		local row = Instance.new('TextButton')
+		row.Size = UDim2.new(1, 0, 0, 30)
+		row.BackgroundColor3 = color.Light(uipallet.Main, 0.02)
+		row.BorderSizePixel = 0
+		row.AutoButtonColor = false
+		row.Text = ''
+		row.Parent = searchresults
+		addCorner(row, UDim.new(0, 4))
+		local icon = Instance.new('ImageLabel')
+		icon.Name = 'Icon'
+		icon.Size = UDim2.fromOffset(16, 16)
+		icon.Position = UDim2.fromOffset(7, 7)
+		icon.BackgroundTransparency = 1
+		icon.Image = getcustomasset('skidv5/assets/new/settings.png')
+		icon.ImageColor3 = color.Dark(uipallet.Text, 0.43)
+		icon.Parent = row
+		local title = Instance.new('TextLabel')
+		title.Name = 'Title'
+		title.Size = UDim2.new(1, -46, 1, 0)
+		title.Position = UDim2.fromOffset(28, 0)
+		title.BackgroundTransparency = 1
+		title.Text = moduleapi.Name
+		title.TextXAlignment = Enum.TextXAlignment.Left
+		title.TextColor3 = color.Dark(uipallet.Text, 0.29)
+		title.TextSize = 13
+		title.FontFace = uipallet.Font
+		title.Parent = row
+		row.MouseButton1Click:Connect(function()
+			moduleapi:Toggle()
+		end)
+		row.MouseEnter:Connect(function()
+			row.BackgroundColor3 = color.Light(uipallet.Main, 0.04)
+		end)
+		row.MouseLeave:Connect(function()
+			row.BackgroundColor3 = color.Light(uipallet.Main, 0.02)
+		end)
+		return row
+	end
+	local function updateSearch()
+		local text = searchbox.Text:lower()
+		for i, v in searchresults:GetChildren() do
+			if v:IsA('GuiObject') then
 				v:Destroy()
 			end
 		end
-		if search.Text == '' then return end
-
-		for i, v in self.Modules do
-			if i:lower():find(search.Text:lower()) then
-				local button = v.Object:Clone()
-				button.Bind:Destroy()
-				button.MouseButton1Click:Connect(function()
-					v:Toggle()
-				end)
-
-				button.MouseButton2Click:Connect(function()
-					v.Object.Parent.Parent.Visible = true
-					local frame = v.Object.Parent
-					local highlight = Instance.new('Frame')
-					highlight.Size = UDim2.fromScale(1, 1)
-					highlight.BackgroundColor3 = Color3.new(1, 1, 1)
-					highlight.BackgroundTransparency = 0.6
-					highlight.BorderSizePixel = 0
-					highlight.Parent = v.Object
-					tween:Tween(highlight, TweenInfo.new(0.5), {
-						BackgroundTransparency = 1
-					})
-					task.delay(0.5, highlight.Destroy, highlight)
-
-					frame.CanvasPosition = Vector2.new(0, (v.Object.LayoutOrder * 40) - (math.min(frame.CanvasSize.Y.Offset, 600) / 2))
-				end)
-
-				button.Parent = children
-				task.spawn(function()
-					repeat
-						for _, v2 in {'Text', 'TextColor3', 'BackgroundColor3'} do
-							button[v2] = v.Object[v2]
+		if #text < 2 then
+			searchresults.Visible = false
+			searchbkg.Size = UDim2.fromOffset(474, 37)
+			return
+		end
+		local count = 0
+		for i, v in mainapi.Modules do
+			if v.Name:lower():find(text) then
+				count = count + 1
+				createSearchResult(v)
+			end
+		end
+		searchresults.Size = UDim2.new(1, -16, 0, count * 32)
+		searchbkg.Size = UDim2.fromOffset(474, math.min(37 + (count * 32) + 8, 437))
+		searchresults.Visible = count > 0
+	end
+	searchbox:GetPropertyChangedSignal('Text'):Connect(updateSearch)
+	searchbox.FocusLost:Connect(function(enter)
+		if enter then
+			for i, v in searchresults:GetChildren() do
+				if v:IsA('GuiObject') then
+					v:Destroy()
+				end
+			end
+			searchresults.Visible = false
+			searchbkg.Size = UDim2.fromOffset(474, 37)
+		end
+	end)
+	local searchcoloring = task.spawn(function()
+		while true do
+			task.wait(0.1)
+			if searchresults.Visible then
+				for i, v in searchresults:GetChildren() do
+					if v:IsA('TextButton') then
+						local icon = v:FindFirstChild('Icon')
+						local title = v:FindFirstChild('Title')
+						if icon and title then
+							if v.Enabled then
+								icon.ImageColor3 = color.Light(uipallet.Text, 0)
+								title.TextColor3 = uipallet.Text
+							else
+								icon.ImageColor3 = color.Dark(uipallet.Text, 0.43)
+								title.TextColor3 = color.Dark(uipallet.Text, 0.29)
+							end
 						end
-						button.UIGradient.Color = v.Object.UIGradient.Color
-						button.UIGradient.Enabled = v.Object.UIGradient.Enabled
-						button.Dots.Dots.ImageColor3 = v.Object.Dots.Dots.ImageColor3
-						task.wait()
-					until not button.Parent
-				end)
+					end
+				end
 			end
 		end
 	end)
-	windowlist:GetPropertyChangedSignal('AbsoluteContentSize'):Connect(function()
-		if self.ThreadFix then
-			setthreadidentity(8)
-		end
-		children.CanvasSize = UDim2.fromOffset(0, windowlist.AbsoluteContentSize.Y / scale.Scale)
-		searchbkg.Size = UDim2.fromOffset(220, math.min(37 + windowlist.AbsoluteContentSize.Y / scale.Scale, 437))
+	mainapi:Clean(searchcoloring)
+	contentcontainer = Instance.new('Frame')
+	contentcontainer.Name = 'Content'
+	contentcontainer.Size = UDim2.fromOffset(490, 427)
+	contentcontainer.Position = UDim2.fromOffset(170, 93)
+	contentcontainer.BackgroundTransparency = 1
+	contentcontainer.BorderSizePixel = 0
+	contentcontainer.Parent = clickgui
+	settingspane = Instance.new('Frame')
+	settingspane.Name = 'SettingsPane'
+	settingspane.Size = UDim2.fromOffset(490, 427)
+	settingspane.Position = UDim2.fromOffset(0, 0)
+	settingspane.BackgroundColor3 = color.Light(uipallet.Main, 0.01)
+	settingspane.BorderSizePixel = 0
+	settingspane.Visible = false
+	settingspane.Parent = contentcontainer
+	addCorner(settingspane, UDim.new(0, 8))
+	local settingsheader = Instance.new('TextLabel')
+	settingsheader.Size = UDim2.fromOffset(150, 40)
+	settingsheader.Position = UDim2.fromOffset(12, 0)
+	settingsheader.BackgroundTransparency = 1
+	settingsheader.Text = 'SETTINGS'
+	settingsheader.TextXAlignment = Enum.TextXAlignment.Left
+	settingsheader.TextColor3 = color.Dark(uipallet.Text, 0.16)
+	settingsheader.TextSize = 13
+	settingsheader.FontFace = uipallet.FontSemiBold
+	settingsheader.Parent = settingspane
+	local backbutton = Instance.new('ImageButton')
+	backbutton.Name = 'Back'
+	backbutton.Size = UDim2.fromOffset(14, 14)
+	backbutton.Position = UDim2.new(1, -30, 0, 13)
+	backbutton.BackgroundTransparency = 1
+	backbutton.AutoButtonColor = false
+	backbutton.Image = getcustomasset('skidv5/assets/new/back.png')
+	backbutton.ImageColor3 = color.Light(uipallet.Main, 0.37)
+	backbutton.MouseEnter:Connect(function()
+		backbutton.ImageColor3 = uipallet.Text
 	end)
+	backbutton.MouseLeave:Connect(function()
+		backbutton.ImageColor3 = color.Light(uipallet.Main, 0.37)
+	end)
+	backbutton.MouseButton1Click:Connect(function()
+		settingspane.Visible = false
+		if mainapi.OverlaysButton and mainapi.OverlaysButton.Enabled and overlaybar then
+			overlaybar.Visible = clickgui.Visible
+		end
+	end)
+	tabbar = Instance.new('Frame')
+	tabbar.Name = 'Tabs'
+	tabbar.Size = UDim2.fromOffset(490, 34)
+	tabbar.Position = UDim2.fromOffset(0, 40)
+	tabbar.BackgroundTransparency = 1
+	tabbar.BorderSizePixel = 0
+	tabbar.Parent = settingspane
+	local tablayout = Instance.new('UIListLayout')
+	tablayout.SortOrder = Enum.SortOrder.LayoutOrder
+	tablayout.FillDirection = Enum.FillDirection.Horizontal
+	tablayout.Padding = UDim.new(0, 6)
+	tablayout.Parent = tabbar
+	local settingschildren = Instance.new('ScrollingFrame')
+	settingschildren.Name = 'Children'
+	settingschildren.Size = UDim2.fromOffset(490, 353)
+	settingschildren.Position = UDim2.fromOffset(0, 74)
+	settingschildren.BackgroundTransparency = 1
+	settingschildren.BorderSizePixel = 0
+	settingschildren.ScrollBarThickness = 2
+	settingschildren.ScrollBarImageTransparency = 0.75
+	settingschildren.AutomaticCanvasSize = Enum.AutomaticSize.Y
+	settingschildren.CanvasSize = UDim2.fromOffset(0, 0)
+	settingschildren.Visible = false
+	settingschildren.Parent = settingspane
+	local settingslayout = Instance.new('UIListLayout')
+	settingslayout.SortOrder = Enum.SortOrder.LayoutOrder
+	settingslayout.HorizontalAlignment = Enum.HorizontalAlignment.Center
+	settingslayout.Padding = UDim.new(0, 3)
+	settingslayout.Parent = settingschildren
+	mainapi.SettingsPanes = {}
+	local settingsparent = function()
+		local pane = mainapi.SettingsPanes['GUI']
+		return pane and pane.Children or settingschildren
+	end
+	local function registerOption(option)
+		categoryapi.Options[option.Name or settingsparent.Name] = option
+	end
 
-	self.Legit.Icon = legiticon
+	function categoryapi:CreateBind()
+		local optionapi = {Bind = {'RightShift'}}
+
+		local button = Instance.new('TextButton')
+		button.Size = UDim2.fromOffset(478, 40)
+		button.BackgroundColor3 = uipallet.Main
+		button.BorderSizePixel = 0
+		button.AutoButtonColor = false
+		button.Text = ''
+		button.Parent = settingsparent()
+		addCorner(button, UDim.new(0, 4))
+		addTooltip(button, 'Change the bind of the GUI')
+		local title = Instance.new('TextLabel')
+		title.Size = UDim2.fromOffset(300, 40)
+		title.Position = UDim2.fromOffset(10, 0)
+		title.BackgroundTransparency = 1
+		title.Text = 'Rebind GUI'
+		title.TextXAlignment = Enum.TextXAlignment.Left
+		title.TextColor3 = color.Dark(uipallet.Text, 0.16)
+		title.TextSize = 14
+		title.FontFace = uipallet.Font
+		title.Parent = button
+		local bind = Instance.new('TextButton')
+		bind.Name = 'Bind'
+		bind.Size = UDim2.fromOffset(20, 20)
+		bind.Position = UDim2.new(1, -10, 0.5, 0)
+		bind.AnchorPoint = Vector2.new(1, 0.5)
+		bind.BackgroundColor3 = Color3.new(1, 1, 1)
+		bind.BackgroundTransparency = 0.94
+		bind.BorderSizePixel = 0
+		bind.AutoButtonColor = false
+		bind.Text = ''
+		bind.Parent = button
+		addTooltip(bind, 'Click to bind')
+		addCorner(bind, UDim.new(0, 4))
+		local icon = Instance.new('ImageLabel')
+		icon.Name = 'Icon'
+		icon.Size = UDim2.fromOffset(10, 10)
+		icon.Position = UDim2.fromOffset(5, 5)
+		icon.BackgroundTransparency = 1
+		icon.Image = getcustomasset('skidv5/assets/new/bind.png')
+		icon.ImageColor3 = color.Dark(uipallet.Text, 0.43)
+		icon.Parent = bind
+		local label = Instance.new('TextLabel')
+		label.Name = 'Text'
+		label.Size = UDim2.fromScale(1, 1)
+		label.Position = UDim2.fromOffset(0, 1)
+		label.BackgroundTransparency = 1
+		label.Visible = false
+		label.Text = ''
+		label.TextColor3 = color.Dark(uipallet.Text, 0.43)
+		label.TextSize = 9
+		label.FontFace = uipallet.FontSemiBold
+		label.Parent = bind
+
+		function optionapi:SetBind(tab, mouse)
+			mainapi.Keybind = #tab <= 0 and mainapi.Keybind or table.clone(tab)
+			self.Bind = mainapi.Keybind
+			if mainapi.VapeButton then
+				mainapi.VapeButton:Destroy()
+				mainapi.VapeButton = nil
+			end
+			bind.Visible = true
+			label.Visible = true
+			icon.Visible = false
+			label.Text = table.concat(mainapi.Keybind, ' + '):upper()
+			bind.Size = UDim2.fromOffset(math.max(getfontsize(label.Text, label.TextSize, label.Font).X + 14, 20), 20)
+		end
+
+		bind.MouseEnter:Connect(function()
+			label.Visible = false
+			icon.Visible = true
+			icon.Image = getcustomasset('skidv5/assets/new/edit.png')
+			icon.ImageColor3 = color.Dark(uipallet.Text, 0.16)
+		end)
+		bind.MouseLeave:Connect(function()
+			label.Visible = true
+			icon.Visible = false
+			icon.Image = getcustomasset('skidv5/assets/new/bind.png')
+			icon.ImageColor3 = color.Dark(uipallet.Text, 0.43)
+		end)
+		bind.MouseButton1Click:Connect(function()
+			mainapi.Binding = optionapi
+		end)
+
+		optionapi.Name = 'Bind'
+		categoryapi.Options.Bind = optionapi
+		optionapi:SetBind(mainapi.Keybind)
+
+		return optionapi
+	end
+
+	function categoryapi:CreateButton(categorysettings)
+		local optionapi = {
+			Enabled = false,
+			Index = getTableSize(categoryapi.Buttons),
+			Name = categorysettings.Name,
+			Category = categoryapi
+		}
+		categorysettings.NoRadio = categorysettings.NoRadio or false
+
+		local row = Instance.new('TextButton')
+		row.Name = categorysettings.Name
+		row.Size = UDim2.fromOffset(158, 34)
+		row.BackgroundColor3 = uipallet.Main
+		row.BorderSizePixel = 0
+		row.AutoButtonColor = false
+		row.Text = ''
+		row.Parent = sidebarlist
+		addCorner(row, UDim.new(0, 4))
+		local icon = Instance.new('ImageLabel')
+		icon.Name = 'Icon'
+		icon.Size = categorysettings.Size or UDim2.fromOffset(16, 16)
+		icon.Position = UDim2.fromOffset(9, 9)
+		icon.BackgroundTransparency = 1
+		icon.Image = categorysettings.Icon
+		icon.ImageColor3 = color.Dark(uipallet.Text, 0.43)
+		icon.Parent = row
+		local title = Instance.new('TextLabel')
+		title.Name = 'Title'
+		title.Size = UDim2.fromOffset(118, 34)
+		title.Position = UDim2.fromOffset(32, 0)
+		title.BackgroundTransparency = 1
+		title.Text = categorysettings.Name
+		title.TextXAlignment = Enum.TextXAlignment.Left
+		title.TextColor3 = color.Dark(uipallet.Text, 0.16)
+		title.TextSize = 13
+		title.FontFace = uipallet.Font
+		title.Parent = row
+		local highlight = Instance.new('Frame')
+		highlight.Name = 'Highlight'
+		highlight.Size = UDim2.fromOffset(2, 26)
+		highlight.Position = UDim2.fromOffset(0, 4)
+		highlight.BackgroundColor3 = Color3.fromHSV(0.46, 1, 1)
+		highlight.BorderSizePixel = 0
+		highlight.Visible = false
+		highlight.Parent = row
+		optionapi.Object = row
+		optionapi.Icon = icon
+
+		local function restyle()
+			if optionapi.Enabled then
+				row.BackgroundColor3 = color.Light(uipallet.Main, 0.04)
+				title.TextColor3 = uipallet.Text
+				icon.ImageColor3 = uipallet.Text
+				highlight.Visible = true
+			else
+				row.BackgroundColor3 = uipallet.Main
+				title.TextColor3 = color.Dark(uipallet.Text, 0.16)
+				icon.ImageColor3 = color.Dark(uipallet.Text, 0.43)
+				highlight.Visible = false
+			end
+		end
+
+		function optionapi:Set(b)
+			self.Enabled = b and true or false
+			restyle()
+			if categorysettings.Window then
+				categorysettings.Window.Visible = self.Enabled
+			end
+		end
+
+		function optionapi:Toggle(b, force)
+			if b == nil then
+				b = not self.Enabled
+			end
+			if b and not force and not categorysettings.NoRadio then
+				for _, v in mainapi.SidebarButtons do
+					if v ~= optionapi then
+						v:Set(false)
+					end
+				end
+				settingspane.Visible = false
+			end
+			self:Set(b)
+		end
+
+		row.MouseButton1Click:Connect(function()
+			optionapi:Toggle()
+		end)
+		row.MouseEnter:Connect(function()
+			if not optionapi.Enabled then
+				row.BackgroundColor3 = color.Light(uipallet.Main, 0.02)
+				title.TextColor3 = color.Dark(uipallet.Text, 0.29)
+			end
+		end)
+		row.MouseLeave:Connect(function()
+			if not optionapi.Enabled then
+				restyle()
+			end
+		end)
+
+		categoryapi.Buttons[categorysettings.Name] = optionapi
+		mainapi.SidebarButtons[optionapi.Index] = optionapi
+		optionapi.NoRadio = categorysettings.NoRadio
+
+		return optionapi
+	end
+
+	function categoryapi:CreateDivider(text)
+		return components.Divider(sidebarlist, text)
+	end
+
+	function categoryapi:CreateSettingsPane(name)
+		if not mainapi.SettingsPanes then
+			mainapi.SettingsPanes = {}
+		end
+		local paneapi = {}
+		local index = getTableSize(categoryapi.Panes) + 1
+		local tab = Instance.new('TextButton')
+		tab.Name = name
+		tab.Size = UDim2.fromOffset(96, 26)
+		tab.Position = UDim2.fromOffset(12 + (#categoryapi.Panes * 102), 4)
+		tab.BackgroundColor3 = color.Light(uipallet.Main, 0.02)
+		tab.BorderSizePixel = 0
+		tab.AutoButtonColor = false
+		tab.Text = name:upper()
+		tab.TextColor3 = color.Dark(uipallet.Text, 0.4)
+		tab.TextSize = 11
+		tab.FontFace = uipallet.FontSemiBold
+		tab.Parent = tabbar
+		addCorner(tab, UDim.new(0, 4))
+		local pane = Instance.new('ScrollingFrame')
+		pane.Name = name
+		pane.Size = UDim2.fromOffset(490, 353)
+		pane.Position = UDim2.fromOffset(0, 74)
+		pane.BackgroundTransparency = 1
+		pane.BorderSizePixel = 0
+		pane.ScrollBarThickness = 2
+		pane.ScrollBarImageTransparency = 0.75
+		pane.AutomaticCanvasSize = Enum.AutomaticSize.Y
+		pane.CanvasSize = UDim2.fromOffset(0, 0)
+		pane.Visible = false
+		pane.Parent = settingspane
+		local panechildren = Instance.new('Frame')
+		panechildren.Name = 'Children'
+		panechildren.Size = UDim2.fromOffset(484, 348)
+		panechildren.BackgroundTransparency = 1
+		panechildren.BorderSizePixel = 0
+		panechildren.Parent = pane
+		local panelayout = Instance.new('UIListLayout')
+		panelayout.SortOrder = Enum.SortOrder.LayoutOrder
+		panelayout.HorizontalAlignment = Enum.HorizontalAlignment.Center
+		panelayout.Padding = UDim.new(0, 3)
+		panelayout.Parent = panechildren
+		local function select()
+			for i, v in categoryapi.Panes do
+				v.Tab.BackgroundColor3 = color.Light(uipallet.Main, 0.02)
+				v.Tab.TextColor3 = color.Dark(uipallet.Text, 0.4)
+				v.Pane.Visible = false
+			end
+			tab.BackgroundColor3 = color.Light(uipallet.Main, 0.06)
+			tab.TextColor3 = uipallet.Text
+			pane.Visible = true
+		end
+		tab.MouseButton1Click:Connect(function()
+			select()
+		end)
+		tab.MouseEnter:Connect(function()
+			if pane.Visible then return end
+			tab.BackgroundColor3 = color.Light(uipallet.Main, 0.04)
+		end)
+		tab.MouseLeave:Connect(function()
+			if pane.Visible then return end
+			tab.BackgroundColor3 = color.Light(uipallet.Main, 0.02)
+		end)
+		paneapi.Tab = tab
+		paneapi.Pane = pane
+		paneapi.Children = panechildren
+		categoryapi.Panes[index] = paneapi
+		mainapi.SettingsPanes[name] = paneapi
+		if index == 1 then
+			select()
+		end
+		for i, v in components do
+			if i ~= 'Divider' then
+				paneapi[i] = function(settings)
+					return v(panechildren, settings, categoryapi)
+				end
+			end
+		end
+		function paneapi:CreateDivider(text)
+			return components.Divider(panechildren, text)
+		end
+		function paneapi:CreateButton(settings)
+			local row = Instance.new('TextButton')
+			row.Name = settings.Name
+			row.Size = UDim2.fromOffset(478, 40)
+			row.BackgroundColor3 = color.Light(uipallet.Main, 0.02)
+			row.BorderSizePixel = 0
+			row.AutoButtonColor = false
+			row.Text = ''
+			row.Parent = panechildren
+			addCorner(row, UDim.new(0, 4))
+			local title = Instance.new('TextLabel')
+			title.Size = UDim2.fromOffset(300, 40)
+			title.Position = UDim2.fromOffset(10, 0)
+			title.BackgroundTransparency = 1
+			title.Text = settings.Name
+			title.TextXAlignment = Enum.TextXAlignment.Left
+			title.TextColor3 = color.Dark(uipallet.Text, 0.16)
+			title.TextSize = 14
+			title.FontFace = uipallet.Font
+			title.Parent = row
+			row.MouseButton1Click:Connect(function()
+				if settings.Function then
+					settings.Function()
+				end
+			end)
+			row.MouseEnter:Connect(function()
+				row.BackgroundColor3 = color.Light(uipallet.Main, 0.04)
+			end)
+			row.MouseLeave:Connect(function()
+				row.BackgroundColor3 = color.Light(uipallet.Main, 0.02)
+			end)
+			addTooltip(row, settings.Tooltip)
+			return {Object = row}
+		end
+		function paneapi:Clear()
+			for i, v in panechildren:GetChildren() do
+				if v:IsA('GuiObject') then
+					v:Destroy()
+				end
+			end
+		end
+		return paneapi
+	end
+
+	function categoryapi:CreateOverlayBar()
+		local bar = Instance.new('Frame')
+		bar.Name = 'OverlayBar'
+		bar.Size = UDim2.fromOffset(200, 30)
+		bar.Position = UDim2.new(0, 12, 1, -12)
+		bar.AnchorPoint = Vector2.new(0, 1)
+		bar.BackgroundColor3 = color.Light(uipallet.Main, 0.05)
+		bar.BorderSizePixel = 0
+		bar.Visible = false
+		bar.Parent = scaledgui
+		addBlur(bar)
+		addCorner(bar, UDim.new(0, 8))
+		local title = Instance.new('TextLabel')
+		title.Size = UDim2.fromOffset(200, 30)
+		title.BackgroundTransparency = 1
+		title.Text = 'Overlays'
+		title.TextColor3 = color.Dark(uipallet.Text, 0.4)
+		title.TextSize = 13
+		title.FontFace = uipallet.FontSemiBold
+		title.Parent = bar
+		local barlist = Instance.new('ScrollingFrame')
+		barlist.Name = 'List'
+		barlist.Size = UDim2.new(1, 0, 1, -30)
+		barlist.Position = UDim2.fromOffset(0, 30)
+		barlist.BackgroundTransparency = 1
+		barlist.BorderSizePixel = 0
+		barlist.ScrollBarThickness = 2
+		barlist.ScrollBarImageTransparency = 0.75
+		barlist.AutomaticCanvasSize = Enum.AutomaticSize.Y
+		barlist.CanvasSize = UDim2.fromOffset(0, 0)
+		barlist.Parent = bar
+		local barlayout = Instance.new('UIListLayout')
+		barlayout.SortOrder = Enum.SortOrder.LayoutOrder
+		barlayout.HorizontalAlignment = Enum.HorizontalAlignment.Center
+		barlayout.Padding = UDim.new(0, 2)
+		barlayout.Parent = barlist
+		local optionapi = {Toggles = {}}
+
+		function optionapi:CreateToggle(settings)
+			local toggleapi = {
+				Name = settings.Name,
+				Icon = settings.Icon,
+				Enabled = false,
+				Index = #optionapi.Toggles + 1
+			}
+			local chip = Instance.new('TextButton')
+			chip.Name = settings.Name
+			chip.Size = UDim2.fromOffset(188, 32)
+			chip.BackgroundColor3 = color.Light(uipallet.Main, 0.02)
+			chip.BorderSizePixel = 0
+			chip.AutoButtonColor = false
+			chip.Text = ''
+			chip.Parent = barlist
+			addCorner(chip, UDim.new(0, 4))
+			local chipicon = Instance.new('ImageLabel')
+			chipicon.Name = 'Icon'
+			chipicon.Size = UDim2.fromOffset(16, 16)
+			chipicon.Position = UDim2.fromOffset(6, 8)
+			chipicon.BackgroundTransparency = 1
+			chipicon.Image = settings.Icon
+			chipicon.ImageColor3 = color.Dark(uipallet.Text, 0.43)
+			chipicon.Parent = chip
+			local chiptitle = Instance.new('TextLabel')
+			chiptitle.Name = 'Title'
+			chiptitle.Size = UDim2.new(1, -70, 1, 0)
+			chiptitle.Position = UDim2.fromOffset(28, 0)
+			chiptitle.BackgroundTransparency = 1
+			chiptitle.Text = settings.Name
+			chiptitle.TextXAlignment = Enum.TextXAlignment.Left
+			chiptitle.TextColor3 = color.Dark(uipallet.Text, 0.16)
+			chiptitle.TextSize = 13
+			chiptitle.FontFace = uipallet.Font
+			chiptitle.Parent = chip
+			local knob = Instance.new('Frame')
+			knob.Name = 'Knob'
+			knob.Size = UDim2.fromOffset(22, 12)
+			knob.Position = UDim2.new(1, -30, 0.5, 0)
+			knob.AnchorPoint = Vector2.new(1, 0.5)
+			knob.BackgroundColor3 = color.Light(uipallet.Main, 0.14)
+			knob.BorderSizePixel = 0
+			knob.Parent = chip
+			addCorner(knob, UDim.new(1, 0))
+			local knobmain = Instance.new('Frame')
+			knobmain.Name = 'KnobMain'
+			knobmain.Size = UDim2.fromOffset(8, 8)
+			knobmain.Position = UDim2.fromOffset(2, 2)
+			knobmain.BackgroundColor3 = color.Light(uipallet.Main, 0.26)
+			knobmain.BorderSizePixel = 0
+			knobmain.Parent = knob
+			addCorner(knobmain, UDim.new(1, 0))
+			toggleapi.Object = chip
+			toggleapi.Knob = knobmain
+
+			local function restyle()
+				if toggleapi.Enabled then
+					chiptitle.TextColor3 = uipallet.Text
+					chipicon.ImageColor3 = uipallet.Text
+					knob.BackgroundColor3 = Color3.fromHSV(
+						mainapi.GUIColor.Hue,
+						mainapi.GUIColor.Sat,
+						math.clamp(mainapi.GUIColor.Value + 0.08, 0, 1)
+					)
+					knobmain.Position = UDim2.fromOffset(12, 2)
+				else
+					chiptitle.TextColor3 = color.Dark(uipallet.Text, 0.16)
+					chipicon.ImageColor3 = color.Dark(uipallet.Text, 0.43)
+					knob.BackgroundColor3 = color.Light(uipallet.Main, 0.14)
+					knobmain.Position = UDim2.fromOffset(2, 2)
+				end
+			end
+
+			function toggleapi:Toggle(b)
+				if b == nil then
+					b = not self.Enabled
+				end
+				self.Enabled = b and true or false
+				restyle()
+				task.spawn(settings.Function, self.Enabled)
+			end
+
+			function toggleapi:Set(b)
+				self.Enabled = b and true or false
+				restyle()
+			end
+
+			chip.MouseButton1Click:Connect(function()
+				toggleapi:Toggle()
+			end)
+			chip.MouseEnter:Connect(function()
+				chip.BackgroundColor3 = color.Light(uipallet.Main, 0.04)
+			end)
+			chip.MouseLeave:Connect(function()
+				chip.BackgroundColor3 = color.Light(uipallet.Main, 0.02)
+			end)
+
+			restyle()
+			optionapi.Toggles[toggleapi.Index] = toggleapi
+			bar.Size = UDim2.fromOffset(200, math.min(30 + (32 * #optionapi.Toggles) + (2 * (#optionapi.Toggles - 1)) + 6, 400))
+			return toggleapi
+		end
+
+		function optionapi:Clear()
+			for i, v in barlist:GetChildren() do
+				if v:IsA('GuiObject') then
+					v:Destroy()
+				end
+			end
+			optionapi.Toggles = {}
+			bar.Size = UDim2.fromOffset(200, 30)
+		end
+
+		overlaybar = bar
+		mainapi.Overlaybar = bar
+		mainapi.Overlays = optionapi
+
+		return optionapi
+	end
+
+	function categoryapi:CreateGUISlider(categorysettings)
+		local slidercolors = {
+			Color3.fromRGB(255, 95, 95),
+			Color3.fromRGB(255, 184, 87),
+			Color3.fromRGB(255, 235, 105),
+			Color3.fromRGB(118, 255, 173),
+			Color3.fromRGB(91, 232, 255),
+			Color3.fromRGB(133, 125, 255),
+			Color3.fromRGB(248, 125, 255)
+		}
+		local slidercolorpos = {4, 33, 62, 90, 119, 148, 177}
+		local optionapi = {
+			Type = 'GUISlider',
+			Notch = 4,
+			Hue = 0.46,
+			Sat = 0.96,
+			Value = 0.52,
+			Rainbow = false,
+			CustomColor = false
+		}
+
+		local button = Instance.new('TextButton')
+		button.Name = categorysettings.Name
+		button.Size = UDim2.fromOffset(478, 40)
+		button.BackgroundColor3 = color.Light(uipallet.Main, 0.04)
+		button.BorderSizePixel = 0
+		button.AutoButtonColor = false
+		button.Text = ''
+		button.Parent = settingsparent()
+		addCorner(button, UDim.new(0, 4))
+		addTooltip(button, 'Change the color of the GUI')
+		local title = Instance.new('TextLabel')
+		title.Size = UDim2.fromOffset(300, 40)
+		title.Position = UDim2.fromOffset(10, 0)
+		title.BackgroundTransparency = 1
+		title.Text = categorysettings.Name
+		title.TextXAlignment = Enum.TextXAlignment.Left
+		title.TextColor3 = color.Dark(uipallet.Text, 0.16)
+		title.TextSize = 14
+		title.FontFace = uipallet.Font
+		title.Parent = button
+		local colorframe = Instance.new('Frame')
+		colorframe.Size = UDim2.fromOffset(70, 30)
+		colorframe.Position = UDim2.new(1, -10, 0.5, 0)
+		colorframe.AnchorPoint = Vector2.new(1, 0.5)
+		colorframe.BackgroundColor3 = Color3.fromHSV(optionapi.Hue, optionapi.Sat, optionapi.Value)
+		colorframe.BorderSizePixel = 0
+		colorframe.Parent = button
+		addCorner(colorframe, UDim.new(0, 4))
+		local customchildren = Instance.new('Frame')
+		customchildren.Size = UDim2.new(1, 0, 0, 0)
+		customchildren.Position = UDim2.new(0, 0, 1, 0)
+		customchildren.BackgroundTransparency = 1
+		customchildren.BorderSizePixel = 0
+		customchildren.Visible = false
+		customchildren.Parent = button
+		local customlayout = Instance.new('UIListLayout')
+		customlayout.SortOrder = Enum.SortOrder.LayoutOrder
+		customlayout.Padding = UDim.new(0, 4)
+		customlayout.Parent = customchildren
+
+		local function updateCustom()
+			customchildren.Size = UDim2.new(1, 0, 0, customlayout.AbsoluteContentSize.Y)
+			customchildren.Visible = optionapi.Notch == 1
+		end
+
+		local function notifySlider(setting, value)
+			local label = customchildren:FindFirstChild(setting)
+			if label and label:IsA('TextLabel') then
+				label.Text = setting .. ' - ' .. math.round(value * 100) .. '%'
+			end
+		end
+
+		local function updateColor()
+			local hue = optionapi.Hue
+			local sat = optionapi.Sat
+			local value = optionapi.Value
+			if optionapi.Rainbow then
+				optionapi.Hue = mainapi.RainbowHue
+				hue = mainapi.RainbowHue
+			end
+			local color = Color3.fromHSV(hue, sat, value)
+			colorframe.BackgroundColor3 = color
+			if mainapi.GUIColor == optionapi then
+				mainapi.RainbowTable = {hue, sat, value, optionapi.Rainbow, optionapi.CustomColor}
+			end
+			if categorysettings.Function then
+				categorysettings.Function(hue, sat, value)
+			end
+		end
+
+		local function createSlider(settings)
+			local expand = Instance.new('TextButton')
+			expand.Name = settings.Name
+			expand.Size = UDim2.fromOffset(478, 28)
+			expand.BackgroundColor3 = color.Light(uipallet.Main, 0.02)
+			expand.BorderSizePixel = 0
+			expand.AutoButtonColor = false
+			expand.Text = ''
+			expand.Parent = customchildren
+			addCorner(expand, UDim.new(0, 4))
+			local expandtitle = Instance.new('TextLabel')
+			expandtitle.Size = UDim2.fromOffset(240, 28)
+			expandtitle.Position = UDim2.fromOffset(10, 0)
+			expandtitle.BackgroundTransparency = 1
+			expandtitle.Text = settings.Name .. ' - ' .. math.round(settings.Value * 100) .. '%'
+			expandtitle.TextXAlignment = Enum.TextXAlignment.Left
+			expandtitle.TextColor3 = color.Dark(uipallet.Text, 0.29)
+			expandtitle.TextSize = 13
+			expandtitle.FontFace = uipallet.Font
+			expandtitle.Parent = expand
+			local slider = Instance.new('Frame')
+			slider.Name = 'Slider'
+			slider.Size = UDim2.new(1, -120, 0, 4)
+			slider.Position = UDim2.fromOffset(40, 12)
+			slider.BackgroundColor3 = color.Light(uipallet.Main, 0.11)
+			slider.BorderSizePixel = 0
+			slider.Parent = expand
+			local fill = Instance.new('Frame')
+			fill.Name = 'Fill'
+			fill.BackgroundColor3 = Color3.fromHSV(optionapi.Hue, optionapi.Sat, optionapi.Value)
+			fill.BorderSizePixel = 0
+			fill.Parent = slider
+			local knob = Instance.new('ImageLabel')
+			knob.Name = 'Knob'
+			knob.Size = UDim2.fromOffset(14, 14)
+			knob.Position = UDim2.new(0.5, -7, 0.5, -7)
+			knob.BackgroundTransparency = 1
+			knob.Image = getcustomasset('skidv5/assets/new/guislider.png')
+			knob.ImageColor3 = color.Dark(uipallet.Text, 0.29)
+			knob.Parent = slider
+			local function setPosition()
+				local x = math.clamp(settings.Value, 0, 1) * (slider.AbsoluteSize.X - knob.AbsoluteSize.X)
+				fill.Size = UDim2.fromOffset(x + 7, 4)
+				knob.Position = UDim2.fromOffset(x, -5)
+			end
+			local function updateValue(x)
+				settings.Value = math.clamp((x - slider.AbsolutePosition.X) / (slider.AbsoluteSize.X - knob.AbsoluteSize.X), 0, 1)
+				expandtitle.Text = settings.Name .. ' - ' .. math.round(settings.Value * 100) .. '%'
+				setPosition()
+			end
+			slider.InputBegan:Connect(function(input)
+				if input.UserInputType == Enum.UserInputType.MouseButton1 then
+					updateValue(input.Position.X)
+					local connection
+					connection = inputService.InputChanged:Connect(function(input2)
+						if input2.UserInputType == Enum.UserInputType.MouseMovement then
+							updateValue(input2.Position.X)
+						end
+					end)
+					local connection2
+					connection2 = inputService.InputEnded:Connect(function(input2)
+						if input2 == input then
+							connection:Disconnect()
+							connection2:Disconnect()
+						end
+					end)
+				end
+			end)
+			slider.MouseWheelForward:Connect(function()
+				settings.Value = math.clamp(settings.Value + 0.05, 0, 1)
+				expandtitle.Text = settings.Name .. ' - ' .. math.round(settings.Value * 100) .. '%'
+				setPosition()
+			end)
+			slider.MouseWheelBackward:Connect(function()
+				settings.Value = math.clamp(settings.Value - 0.05, 0, 1)
+				expandtitle.Text = settings.Name .. ' - ' .. math.round(settings.Value * 100) .. '%'
+				setPosition()
+			end)
+			settings.Set = setPosition
+			return expand, expandtitle, settings
+		end
+
+		local function updateSliders()
+			for i, v in {optionapi.Sat, optionapi.Value, optionapi.Hue} do
+				local expand = customchildren:FindFirstChild(v.Name)
+				if expand then
+					local slider = expand:FindFirstChild('Slider')
+					if slider then
+						local fill = slider:FindFirstChild('Fill')
+						local knob = slider:FindFirstChild('Knob')
+						local x = math.clamp(v.Value, 0, 1) * (slider.AbsoluteSize.X - knob.AbsoluteSize.X)
+						fill.Size = UDim2.fromOffset(x + 7, 4)
+						knob.Position = UDim2.fromOffset(x, -5)
+						fill.BackgroundColor3 = Color3.fromHSV(optionapi.Hue, optionapi.Sat, optionapi.Value)
+						local expandtitle = expand:FindFirstChildOfClass('TextLabel')
+						if expandtitle then
+							expandtitle.Text = v.Name .. ' - ' .. math.round(v.Value * 100) .. '%'
+						end
+					end
+				end
+			end
+			if optionapi.Rainbow then
+				optionapi.Hue = mainapi.RainbowHue
+			end
+			updateColor()
+		end
+
+		local function updateRainbow()
+			optionapi.Hue = mainapi.RainbowHue
+			updateColor()
+		end
+
+		local function updateCustomColor()
+			optionapi.CustomColor = true
+			updateSliders()
+		end
+
+		local function setValue(v, s, b, n)
+			if v then optionapi.Hue = v end
+			if s then optionapi.Sat = s end
+			if b then optionapi.Value = b end
+			if n then optionapi.Notch = n end
+			updateSliders()
+			updateCustom()
+		end
+
+		function optionapi:SetValue(v, s, b, n)
+			setValue(v, s, b, n)
+		end
+
+		function optionapi:Load(tab)
+			setValue(tab.Hue, tab.Sat, tab.Value, 4)
+		end
+
+		local hsv = {Hue = 0, Sat = 1, Value = 1}
+		local function open()
+			updateSliders()
+			updateCustom()
+		end
+
+		local rainbowtoggle = components.Toggle(customchildren, {
+			Name = 'Rainbow Mode',
+			Function = function(callback)
+				optionapi.Rainbow = callback
+				if callback then
+					optionapi.Hue = mainapi.RainbowHue
+				end
+				updateColor()
+			end
+		}, optionapi)
+		local rspeed = components.Slider(customchildren, {
+			Name = 'Rainbow speed',
+			Min = 1,
+			Max = 10,
+			Value = mainapi.RainbowSpeed.Value,
+			Function = function(value)
+				mainapi.RainbowSpeed.Value = value
+			end
+		}, optionapi)
+		local rrate = components.Slider(customchildren, {
+			Name = 'Rainbow update rate',
+			Min = 1,
+			Max = 15,
+			Value = mainapi.RainbowUpdateSpeed.Value,
+			Function = function(value)
+				mainapi.RainbowUpdateSpeed.Value = value
+			end
+		}, optionapi)
+		local expansion = Instance.new('Frame')
+		expansion.Size = UDim2.fromOffset(478, 4)
+		expansion.BackgroundTransparency = 1
+		expansion.BorderSizePixel = 0
+		expansion.Parent = customchildren
+		local expand1 = components.Slider(customchildren, {
+			Name = 'Saturation',
+			Min = 0,
+			Max = 1,
+			Value = optionapi.Sat,
+			Function = function(value)
+				optionapi.Sat = value
+				updateColor()
+				notifySlider('Saturation', value)
+			end
+		}, optionapi)
+		local expand2 = components.Slider(customchildren, {
+			Name = 'Vibrance',
+			Min = 0,
+			Max = 1,
+			Value = optionapi.Value,
+			Function = function(value)
+				optionapi.Value = value
+				updateColor()
+				notifySlider('Vibrance', value)
+			end
+		}, optionapi)
+		local expand3 = components.Slider(customchildren, {
+			Name = 'Hue',
+			Min = 0,
+			Max = 1,
+			Value = optionapi.Hue,
+			Function = function(value)
+				optionapi.Hue = value
+				updateColor()
+				notifySlider('Hue', value)
+			end
+		}, optionapi)
+		local rainbow1 = components.Toggle(customchildren, {
+			Name = 'Custom color',
+			Function = updateCustomColor
+		}, optionapi)
+
+		local function onToggle(value)
+			updateCustom()
+		end
+
+		button.MouseButton1Click:Connect(function()
+			optionapi.Notch = optionapi.Notch == 1 and 4 or 1
+			updateCustom()
+		end)
+		button.MouseEnter:Connect(function()
+			button.BackgroundColor3 = color.Light(uipallet.Main, 0.06)
+		end)
+		button.MouseLeave:Connect(function()
+			button.BackgroundColor3 = color.Light(uipallet.Main, 0.04)
+		end)
+
+		optionapi.Name = categorysettings.Name
+		categoryapi.Options[categorysettings.Name] = optionapi
+		updateColor()
+
+		return optionapi
+	end
+
+	settingsbutton.MouseButton1Click:Connect(function()
+		settingspane.Visible = not settingspane.Visible
+		if settingspane.Visible then
+			for _, v in mainapi.SidebarButtons do
+				v:Set(false)
+			end
+			mainapi.OverlaysButton:Set(false)
+		end
+	end)
+	categoryapi.Object = clickgui
+	categoryapi.Buttons = {}
+	categoryapi.Panes = {}
+	categoryapi.Options = {}
+	categoryapi.Objects = {}
+	categoryapi.List = {}
+	mainapi.SidebarButtons = {}
+	mainapi.Categories.Main = categoryapi
+
+	return categoryapi
 end
 
-function mainapi:CreateLegit()
-	local legitapi = {Modules = {}}
-
-	local window = Instance.new('Frame')
-	window.Name = 'LegitGUI'
-	window.Size = UDim2.fromOffset(700, 389)
-	window.Position = UDim2.new(0.5, -350, 0.5, -194)
+function mainapi:CreateOverlay(categorysettings)
+	local name = categorysettings.Name
+	local icon = categorysettings.Icon
+	local window = Instance.new('TextButton')
+	window.Name = name..'Overlay'
+	window.Size = UDim2.fromOffset(categorysettings.CategorySize or 220, 41)
+	window.Position = categorysettings.Position or UDim2.fromOffset(240, 46)
 	window.BackgroundColor3 = uipallet.Main
+	window.BorderSizePixel = 0
+	window.Text = ''
 	window.Visible = false
 	window.Parent = scaledgui
 	addBlur(window)
-	addCorner(window)
-	makeDraggable(window)
-	local modal = Instance.new('TextButton')
-	modal.BackgroundTransparency = 1
-	modal.Text = ''
-	modal.Modal = true
-	modal.Parent = window
-	local icon = Instance.new('ImageLabel')
-	icon.Name = 'Icon'
-	icon.Size = UDim2.fromOffset(16, 16)
-	icon.Position = UDim2.fromOffset(18, 13)
-	icon.BackgroundTransparency = 1
-	icon.Image = getcustomasset('skidv5/assets/new/legittab.png')
-	icon.ImageColor3 = uipallet.Text
-	icon.Parent = window
-	local close = addCloseButton(window)
+	addCorner(window, UDim.new(0, 6))
+	makeDraggable(window, window)
+	local iconlabel = Instance.new('ImageLabel')
+	iconlabel.Name = 'Icon'
+	iconlabel.Size = categorysettings.Size or UDim2.fromOffset(16, 16)
+	iconlabel.Position = UDim2.fromOffset(12, iconlabel.Size.X.Offset > 14 and 14 or 13)
+	iconlabel.BackgroundTransparency = 1
+	iconlabel.Image = icon
+	iconlabel.ImageColor3 = color.Dark(uipallet.Text, 0.43)
+	iconlabel.Parent = window
+	local title = Instance.new('TextLabel')
+	title.Size = UDim2.new(1, -32, 0, 41)
+	title.Position = UDim2.fromOffset(32, 0)
+	title.BackgroundTransparency = 1
+	title.Text = name
+	title.TextXAlignment = Enum.TextXAlignment.Left
+	title.TextColor3 = color.Dark(uipallet.Text, 0.16)
+	title.TextSize = 14
+	title.FontFace = uipallet.Font
+	title.Parent = window
+	local categoryapi = {
+		Type = 'Overlay',
+		Expanded = false,
+		Button = nil,
+		Pinned = false,
+		Options = {}
+	}
+	categoryapi.Icon = icon
+	categoryapi.Size = categorysettings.Size
+	local customchildren = Instance.new('Frame')
+	customchildren.Name = 'Children'
+	customchildren.Size = UDim2.new(1, 0, 0, 0)
+	customchildren.Position = UDim2.new(0, 0, 1, 0)
+	customchildren.BackgroundTransparency = 1
+	customchildren.BorderSizePixel = 0
+	customchildren.Visible = false
+	customchildren.Parent = window
+	local customlayout = Instance.new('UIListLayout')
+	customlayout.SortOrder = Enum.SortOrder.LayoutOrder
+	customlayout.Padding = UDim.new(0, 4)
+	customlayout.Parent = customchildren
+	local function updateCustom()
+		local y = customlayout.AbsoluteContentSize.Y
+		customchildren.Size = UDim2.new(1, 0, 0, y)
+		customchildren.Visible = categoryapi.Expanded
+		window.Size = UDim2.fromOffset(categorysettings.CategorySize or 220, 41 + y)
+	end
+	window.MouseButton1Click:Connect(function()
+		if not categoryapi.Expanded then
+			categoryapi.Expanded = true
+		end
+		updateCustom()
+	end)
+	categoryapi.Window = window
+	categoryapi.Object = window
+	categoryapi.Children = customchildren
+	categoryapi.Button = mainapi.Overlays:CreateToggle({
+		Name = name,
+		Icon = icon,
+		Size = categorysettings.Size,
+		Function = function(callback)
+			window.Visible = callback and (clickgui.Visible or categoryapi.Pinned)
+			if not callback then
+				for i, v in categoryapi.Connections do
+					v:Disconnect()
+				end
+				table.clear(categoryapi.Connections)
+			end
+			if callback then
+				task.spawn(categorysettings.Function, callback)
+			end
+		end
+	})
+	function categoryapi:Load(tab)
+		self.Button:Set(tab.Enabled or false)
+		self.Pinned = tab.Pinned or false
+		self.Position = tab.Position or {X = 240, Y = 46}
+		self.Expanded = tab.Expanded or false
+		window.Position = UDim2.fromOffset(self.Position.X, self.Position.Y)
+		window.Visible = tab.Enabled and (clickgui.Visible or self.Pinned)
+		updateCustom()
+	end
+	function categoryapi:Save()
+		local save = {}
+		save.Enabled = self.Button.Enabled
+		save.Options = {}
+		for i, v in self.Options do
+			if v.Save then
+				save.Options[i] = v:Save()
+			end
+		end
+		save.Position = {X = window.Position.X.Offset, Y = window.Position.Y.Offset}
+		save.Pinned = self.Pinned
+		save.Expanded = self.Expanded
+		return save
+	end
+	for name, comp in components do
+		if name ~= 'Divider' then
+			categoryapi['Create'..name] = function(settings)
+				return comp(customchildren, settings, categoryapi)
+			end
+		end
+	end
+	function categoryapi:CreateDivider(text)
+		return components.Divider(customchildren, text)
+	end
+	categoryapi.Update = Instance.new('BindableEvent')
+	categoryapi.ColorUpdate = Instance.new('BindableEvent')
+	mainapi.Categories[name] = categoryapi
+	table.insert(mainapi.Windows, window)
+	addMaid(categoryapi)
+	return categoryapi
+end
+
+function mainapi:CreateLegit()
+	local legitapi = {Modules = {}, Type = 'Legit'}
+	local window = Instance.new('TextButton')
+	window.Name = 'LegitWindow'
+	window.Size = UDim2.fromOffset(420, 520)
+	window.Position = UDim2.fromScale(0.5, 0.5)
+	window.AnchorPoint = Vector2.new(0.5, 0.5)
+	window.BackgroundColor3 = uipallet.Main
+	window.BorderSizePixel = 0
+	window.Text = ''
+	window.Visible = false
+	window.Parent = scaledgui
+	addBlur(window)
+	addCorner(window, UDim.new(0, 8))
+	local mainstroke = Instance.new('UIStroke')
+	mainstroke.Color = Color3.new(1, 1, 1)
+	mainstroke.Transparency = 0.9
+	mainstroke.ApplyStrokeMode = Enum.ApplyStrokeMode.Border
+	mainstroke.Parent = window
+	local header = Instance.new('Frame')
+	header.Name = 'Header'
+	header.Size = UDim2.new(1, 0, 0, 44)
+	header.BackgroundColor3 = color.Dark(uipallet.Main, 0.03)
+	header.BorderSizePixel = 0
+	header.Parent = window
+	addCorner(header, UDim.new(0, 8))
+	makeDraggable(window, header)
+	local headertitle = Instance.new('TextLabel')
+	headertitle.Name = 'Title'
+	headertitle.Size = UDim2.fromOffset(250, 44)
+	headertitle.Position = UDim2.fromOffset(12, 0)
+	headertitle.BackgroundTransparency = 1
+	headertitle.Text = 'LEGIT'
+	headertitle.TextXAlignment = Enum.TextXAlignment.Left
+	headertitle.TextColor3 = color.Dark(uipallet.Text, 0.16)
+	headertitle.TextSize = 15
+	headertitle.FontFace = uipallet.FontSemiBold
+	headertitle.Parent = header
+	local close = addCloseButton(header, 10)
+	close.MouseButton1Click:Connect(function()
+		window.Visible = false
+	end)
 	local children = Instance.new('ScrollingFrame')
 	children.Name = 'Children'
-	children.Size = UDim2.fromOffset(684, 340)
-	children.Position = UDim2.fromOffset(14, 41)
+	children.Size = UDim2.new(1, 0, 1, -44)
+	children.Position = UDim2.fromOffset(0, 44)
 	children.BackgroundTransparency = 1
 	children.BorderSizePixel = 0
 	children.ScrollBarThickness = 2
 	children.ScrollBarImageTransparency = 0.75
-	children.CanvasSize = UDim2.new()
+	children.AutomaticCanvasSize = Enum.AutomaticSize.Y
+	children.CanvasSize = UDim2.fromOffset(0, 0)
 	children.Parent = window
-	local windowlist = Instance.new('UIGridLayout')
-	windowlist.SortOrder = Enum.SortOrder.LayoutOrder
-	windowlist.FillDirectionMaxCells = 4
-	windowlist.CellSize = UDim2.fromOffset(163, 114)
-	windowlist.CellPadding = UDim2.fromOffset(6, 5)
-	windowlist.Parent = children
+	local legitlayout = Instance.new('UIListLayout')
+	legitlayout.SortOrder = Enum.SortOrder.LayoutOrder
+	legitlayout.HorizontalAlignment = Enum.HorizontalAlignment.Center
+	legitlayout.Padding = UDim.new(0, 3)
+	legitlayout.Parent = children
 	legitapi.Window = window
-	table.insert(mainapi.Windows, window)
-
-	function legitapi:CreateModule(modulesettings)
-		mainapi:Remove(modulesettings.Name)
-		local moduleapi = {
-			Enabled = false,
-			Options = {},
-			Name = modulesettings.Name,
-			Legit = true
-		}
-
-		local module = Instance.new('TextButton')
-		module.Name = modulesettings.Name
-		module.BackgroundColor3 = color.Light(uipallet.Main, 0.02)
-		module.Text = ''
-		module.AutoButtonColor = false
-		module.Parent = children
-		addTooltip(module, modulesettings.Tooltip)
-		addCorner(module)
-		local title = Instance.new('TextLabel')
-		title.Name = 'Title'
-		title.Size = UDim2.new(1, -16, 0, 20)
-		title.Position = UDim2.fromOffset(16, 81)
-		title.BackgroundTransparency = 1
-		title.Text = modulesettings.Name
-		title.TextXAlignment = Enum.TextXAlignment.Left
-		title.TextColor3 = color.Dark(uipallet.Text, 0.31)
-		title.TextSize = 13
-		title.FontFace = uipallet.Font
-		title.Parent = module
-		local knob = Instance.new('Frame')
-		knob.Name = 'Knob'
-		knob.Size = UDim2.fromOffset(22, 12)
-		knob.Position = UDim2.new(1, -57, 0, 14)
-		knob.BackgroundColor3 = color.Light(uipallet.Main, 0.14)
-		knob.Parent = module
-		addCorner(knob, UDim.new(1, 0))
-		local knobmain = knob:Clone()
-		knobmain.Size = UDim2.fromOffset(8, 8)
-		knobmain.Position = UDim2.fromOffset(2, 2)
-		knobmain.BackgroundColor3 = uipallet.Main
-		knobmain.Parent = knob
-		local dotsbutton = Instance.new('TextButton')
-		dotsbutton.Name = 'Dots'
-		dotsbutton.Size = UDim2.fromOffset(14, 24)
-		dotsbutton.Position = UDim2.new(1, -27, 0, 8)
-		dotsbutton.BackgroundTransparency = 1
-		dotsbutton.Text = ''
-		dotsbutton.Parent = module
-		local dots = Instance.new('ImageLabel')
-		dots.Name = 'Dots'
-		dots.Size = UDim2.fromOffset(2, 12)
-		dots.Position = UDim2.fromOffset(6, 6)
-		dots.BackgroundTransparency = 1
-		dots.Image = getcustomasset('skidv5/assets/new/dots.png')
-		dots.ImageColor3 = color.Light(uipallet.Main, 0.37)
-		dots.Parent = dotsbutton
-		local shadow = Instance.new('TextButton')
-		shadow.Name = 'Shadow'
-		shadow.Size = UDim2.new(1, 0, 1, -5)
-		shadow.BackgroundColor3 = Color3.new()
-		shadow.BackgroundTransparency = 1
-		shadow.AutoButtonColor = false
-		shadow.ClipsDescendants = true
-		shadow.Visible = false
-		shadow.Text = ''
-		shadow.Parent = window
-		addCorner(shadow)
-		local settingspane = Instance.new('TextButton')
-		settingspane.Size = UDim2.new(0, 220, 1, 0)
-		settingspane.Position = UDim2.fromScale(1, 0)
-		settingspane.BackgroundColor3 = uipallet.Main
-		settingspane.AutoButtonColor = false
-		settingspane.Text = ''
-		settingspane.Parent = shadow
-		local settingstitle = Instance.new('TextLabel')
-		settingstitle.Name = 'Title'
-		settingstitle.Size = UDim2.new(1, -36, 0, 20)
-		settingstitle.Position = UDim2.fromOffset(36, 12)
-		settingstitle.BackgroundTransparency = 1
-		settingstitle.Text = modulesettings.Name
-		settingstitle.TextXAlignment = Enum.TextXAlignment.Left
-		settingstitle.TextColor3 = color.Dark(uipallet.Text, 0.16)
-		settingstitle.TextSize = 13
-		settingstitle.FontFace = uipallet.Font
-		settingstitle.Parent = settingspane
-		local back = Instance.new('ImageButton')
-		back.Name = 'Back'
-		back.Size = UDim2.fromOffset(16, 16)
-		back.Position = UDim2.fromOffset(11, 13)
-		back.BackgroundTransparency = 1
-		back.Image = getcustomasset('skidv5/assets/new/back.png')
-		back.ImageColor3 = color.Light(uipallet.Main, 0.37)
-		back.Parent = settingspane
-		addCorner(settingspane)
-		local settingschildren = Instance.new('ScrollingFrame')
-		settingschildren.Name = 'Children'
-		settingschildren.Size = UDim2.new(1, 0, 1, -45)
-		settingschildren.Position = UDim2.fromOffset(0, 41)
-		settingschildren.BackgroundColor3 = uipallet.Main
-		settingschildren.BorderSizePixel = 0
-		settingschildren.ScrollBarThickness = 2
-		settingschildren.ScrollBarImageTransparency = 0.75
-		settingschildren.CanvasSize = UDim2.new()
-		settingschildren.Parent = settingspane
-		local settingswindowlist = Instance.new('UIListLayout')
-		settingswindowlist.SortOrder = Enum.SortOrder.LayoutOrder
-		settingswindowlist.HorizontalAlignment = Enum.HorizontalAlignment.Center
-		settingswindowlist.Parent = settingschildren
-		if modulesettings.Size then
-			local modulechildren = Instance.new('Frame')
-			modulechildren.Size = modulesettings.Size
-			modulechildren.BackgroundTransparency = 1
-			modulechildren.Visible = false
-			modulechildren.Parent = scaledgui
-			makeDraggable(modulechildren, window)
-			local objectstroke = Instance.new('UIStroke')
-			objectstroke.Color = Color3.fromRGB(5, 134, 105)
-			objectstroke.ApplyStrokeMode = Enum.ApplyStrokeMode.Border
-			objectstroke.Thickness = 0
-			objectstroke.Parent = modulechildren
-			moduleapi.Children = modulechildren
-		end
-		modulesettings.Function = modulesettings.Function or function() end
-		addMaid(moduleapi)
-
-		function moduleapi:Toggle()
-			moduleapi.Enabled = not moduleapi.Enabled
-			if moduleapi.Children then
-				moduleapi.Children.Visible = moduleapi.Enabled
-			end
-			title.TextColor3 = moduleapi.Enabled and color.Light(uipallet.Text, 0.2) or color.Dark(uipallet.Text, 0.31)
-			module.BackgroundColor3 = moduleapi.Enabled and color.Light(uipallet.Main, 0.05) or module.BackgroundColor3
-			tween:Tween(knob, uipallet.Tween, {
-				BackgroundColor3 = moduleapi.Enabled and Color3.fromHSV(mainapi.GUIColor.Hue, mainapi.GUIColor.Sat, mainapi.GUIColor.Value) or color.Light(uipallet.Main, 0.14)
-			})
-			tween:Tween(knobmain, uipallet.Tween, {
-				Position = UDim2.fromOffset(moduleapi.Enabled and 12 or 2, 2)
-			})
-			if not moduleapi.Enabled then
-				for _, v in moduleapi.Connections do
-					v:Disconnect()
-				end
-				table.clear(moduleapi.Connections)
-			end
-			task.spawn(modulesettings.Function, moduleapi.Enabled)
-		end
-
-		back.MouseEnter:Connect(function()
-			back.ImageColor3 = uipallet.Text
-		end)
-		back.MouseLeave:Connect(function()
-			back.ImageColor3 = color.Light(uipallet.Main, 0.37)
-		end)
-		back.MouseButton1Click:Connect(function()
-			tween:Tween(shadow, uipallet.Tween, {
-				BackgroundTransparency = 1
-			})
-			tween:Tween(settingspane, uipallet.Tween, {
-				Position = UDim2.fromScale(1, 0)
-			})
-			task.wait(0.2)
-			shadow.Visible = false
-		end)
-		dotsbutton.MouseButton1Click:Connect(function()
-			shadow.Visible = true
-			tween:Tween(shadow, uipallet.Tween, {
-				BackgroundTransparency = 0.5
-			})
-			tween:Tween(settingspane, uipallet.Tween, {
-				Position = UDim2.new(1, -220, 0, 0)
-			})
-		end)
-		dotsbutton.MouseEnter:Connect(function()
-			dots.ImageColor3 = uipallet.Text
-		end)
-		dotsbutton.MouseLeave:Connect(function()
-			dots.ImageColor3 = color.Light(uipallet.Main, 0.37)
-		end)
-		module.MouseEnter:Connect(function()
-			if not moduleapi.Enabled then
-				module.BackgroundColor3 = color.Light(uipallet.Main, 0.05)
-			end
-		end)
-		module.MouseLeave:Connect(function()
-			if not moduleapi.Enabled then
-				module.BackgroundColor3 = color.Light(uipallet.Main, 0.02)
-			end
-		end)
-		module.MouseButton1Click:Connect(function()
-			moduleapi:Toggle()
-		end)
-		module.MouseButton2Click:Connect(function()
-			shadow.Visible = true
-			tween:Tween(shadow, uipallet.Tween, {
-				BackgroundTransparency = 0.5
-			})
-			tween:Tween(settingspane, uipallet.Tween, {
-				Position = UDim2.new(1, -220, 0, 0)
-			})
-		end)
-		shadow.MouseButton1Click:Connect(function()
-			tween:Tween(shadow, uipallet.Tween, {
-				BackgroundTransparency = 1
-			})
-			tween:Tween(settingspane, uipallet.Tween, {
-				Position = UDim2.fromScale(1, 0)
-			})
-			task.wait(0.2)
-			shadow.Visible = false
-		end)
-		settingswindowlist:GetPropertyChangedSignal('AbsoluteContentSize'):Connect(function()
-			if mainapi.ThreadFix then
-				setthreadidentity(8)
-			end
-			settingschildren.CanvasSize = UDim2.fromOffset(0, settingswindowlist.AbsoluteContentSize.Y / scale.Scale)
-		end)
-
-		for i, v in components do
-			moduleapi['Create'..i] = function(_, optionsettings)
-				return v(optionsettings, settingschildren, moduleapi)
-			end
-		end
-
-		moduleapi.Object = module
-		legitapi.Modules[modulesettings.Name] = moduleapi
-
-		local sorting = {}
-		for _, v in legitapi.Modules do
-			table.insert(sorting, v.Name)
-		end
-		table.sort(sorting)
-
-		for i, v in sorting do
-			legitapi.Modules[v].Object.LayoutOrder = i
-		end
-
+	function legitapi:CreateModule(settings)
+		local moduleapi = createModule(children, settings, legitapi, 490)
+		mainapi.Modules[moduleapi.Name] = moduleapi
 		return moduleapi
 	end
-
-	local function visibleCheck()
-		for _, v in legitapi.Modules do
-			if v.Children then
-				local visible = clickgui.Visible
-				for _, v2 in self.Windows do
-					visible = visible or v2.Visible
-				end
-				v.Children.Visible = (not visible or window.Visible) and v.Enabled
-			end
-		end
-	end
-
-	close.MouseButton1Click:Connect(function()
-		window.Visible = false
-		clickgui.Visible = true
-	end)
-	self:Clean(clickgui:GetPropertyChangedSignal('Visible'):Connect(visibleCheck))
-	window:GetPropertyChangedSignal('Visible'):Connect(function()
-		self:UpdateGUI(self.GUIColor.Hue, self.GUIColor.Sat, self.GUIColor.Value)
-		visibleCheck()
-	end)
-	windowlist:GetPropertyChangedSignal('AbsoluteContentSize'):Connect(function()
-		if self.ThreadFix then
-			setthreadidentity(8)
-		end
-		children.CanvasSize = UDim2.fromOffset(0, windowlist.AbsoluteContentSize.Y / scale.Scale)
-	end)
-
-	self.Legit = legitapi
-
+	mainapi.Legit = legitapi
+	table.insert(mainapi.Windows, window)
 	return legitapi
 end
 
-function mainapi:CreateNotification(title, text, duration, type)
-	if not self.Notifications.Enabled then return end
-	task.delay(0, function()
-		if self.ThreadFix then
-			setthreadidentity(8)
+function mainapi:CreateNotification(name, text, time, tag, sound)
+	time = time or 3
+	tag = tag or 'INFO'
+	local notification = Instance.new('Frame')
+	notification.Name = name
+	notification.Size = UDim2.fromOffset(268, 78)
+	notification.BackgroundColor3 = color.Light(uipallet.Main, 0.05)
+	notification.BorderSizePixel = 0
+	notification.Parent = notifications
+	addBlur(notification)
+	addCorner(notification, UDim.new(0, 8))
+	local count = 0
+	for i, v in notifications:GetChildren() do
+		if v:IsA('Frame') then
+			count = count + 1
 		end
-		local i = #notifications:GetChildren() + 1
-		local notification = Instance.new('ImageLabel')
-		notification.Name = 'Notification'
-		notification.Size = UDim2.fromOffset(math.max(getfontsize(removeTags(text), 14, uipallet.Font).X + 80, 266), 75)
-		notification.Position = UDim2.new(1, 0, 1, -(29 + (78 * i)))
-		notification.ZIndex = 5
-		notification.BackgroundTransparency = 1
-		notification.Image = getcustomasset('skidv5/assets/new/notification.png')
-		notification.ScaleType = Enum.ScaleType.Slice
-		notification.SliceCenter = Rect.new(7, 7, 9, 9)
-		notification.Parent = notifications
-		addBlur(notification, true)
-		local iconshadow = Instance.new('ImageLabel')
-		iconshadow.Name = 'Icon'
-		iconshadow.Size = UDim2.fromOffset(60, 60)
-		iconshadow.Position = UDim2.fromOffset(-5, -8)
-		iconshadow.ZIndex = 5
-		iconshadow.BackgroundTransparency = 1
-		iconshadow.Image = getcustomasset('skidv5/assets/new/'..(type or 'info')..'.png')
-		iconshadow.ImageColor3 = Color3.new()
-		iconshadow.ImageTransparency = 0.5
-		iconshadow.Parent = notification
-		local icon = iconshadow:Clone()
-		icon.Position = UDim2.fromOffset(-1, -1)
-		icon.ImageColor3 = Color3.new(1, 1, 1)
-		icon.ImageTransparency = 0
-		icon.Parent = iconshadow
-		local titlelabel = Instance.new('TextLabel')
-		titlelabel.Name = 'Title'
-		titlelabel.Size = UDim2.new(1, -56, 0, 20)
-		titlelabel.Position = UDim2.fromOffset(46, 16)
-		titlelabel.ZIndex = 5
-		titlelabel.BackgroundTransparency = 1
-		titlelabel.Text = "<stroke color='#FFFFFF' joins='round' thickness='0.3' transparency='0.5'>"..title..'</stroke>'
-		titlelabel.TextXAlignment = Enum.TextXAlignment.Left
-		titlelabel.TextYAlignment = Enum.TextYAlignment.Top
-		titlelabel.TextColor3 = Color3.fromRGB(209, 209, 209)
-		titlelabel.TextSize = 14
-		titlelabel.RichText = true
-		titlelabel.FontFace = uipallet.FontSemiBold
-		titlelabel.Parent = notification
-		local textshadow = titlelabel:Clone()
-		textshadow.Name = 'Text'
-		textshadow.Position = UDim2.fromOffset(47, 44)
-		textshadow.Text = removeTags(text)
-		textshadow.TextColor3 = Color3.new()
-		textshadow.TextTransparency = 0.5
-		textshadow.RichText = false
-		textshadow.FontFace = uipallet.Font
-		textshadow.Parent = notification
-		local textlabel = textshadow:Clone()
-		textlabel.Position = UDim2.fromOffset(-1, -1)
-		textlabel.Text = text
-		textlabel.TextColor3 = Color3.fromRGB(170, 170, 170)
-		textlabel.TextTransparency = 0
-		textlabel.RichText = true
-		textlabel.Parent = textshadow
-		local progress = Instance.new('Frame')
-		progress.Name = 'Progress'
-		progress.Size = UDim2.new(1, -13, 0, 2)
-		progress.Position = UDim2.new(0, 3, 1, -4)
-		progress.ZIndex = 5
-		progress.BackgroundColor3 =
-			type == 'alert' and Color3.fromRGB(250, 50, 56)
-			or type == 'warning' and Color3.fromRGB(236, 129, 43)
-			or Color3.fromRGB(220, 220, 220)
-		progress.BorderSizePixel = 0
-		progress.Parent = notification
-		if tween.Tween then
-			tween:Tween(notification, TweenInfo.new(0.4, Enum.EasingStyle.Exponential), {
-				AnchorPoint = Vector2.new(1, 0)
-			}, tween.tweenstwo)
-			tween:Tween(progress, TweenInfo.new(duration, Enum.EasingStyle.Linear), {
-				Size = UDim2.fromOffset(0, 2)
-			})
-		end
-		task.delay(duration, function()
-			if tween.Tween then
-				tween:Tween(notification, TweenInfo.new(0.4, Enum.EasingStyle.Exponential), {
-					AnchorPoint = Vector2.new(0, 0)
-				}, tween.tweenstwo)
+	end
+	local y = 29 + (78 * count)
+	notification.Position = UDim2.new(1, -90, 0, y)
+	local title = Instance.new('TextLabel')
+	title.Name = 'Title'
+	title.Size = UDim2.fromOffset(240, 40)
+	title.Position = UDim2.fromOffset(18, 10)
+	title.BackgroundTransparency = 1
+	title.Text = name
+	title.TextXAlignment = Enum.TextXAlignment.Left
+	title.TextColor3 = uipallet.Text
+	title.TextSize = 15
+	title.FontFace = uipallet.FontSemiBold
+	title.Parent = notification
+	local description = Instance.new('TextLabel')
+	description.Name = 'Description'
+	description.Size = UDim2.fromOffset(240, 40)
+	description.Position = UDim2.fromOffset(18, 38)
+	description.BackgroundTransparency = 1
+	description.Text = text or ''
+	description.TextXAlignment = Enum.TextXAlignment.Left
+	description.TextColor3 = color.Dark(uipallet.Text, 0.29)
+	description.TextSize = 12
+	description.FontFace = uipallet.Font
+	description.TextWrapped = true
+	description.Parent = notification
+	local taglabel = Instance.new('TextLabel')
+	taglabel.Name = 'Tag'
+	taglabel.Size = UDim2.fromOffset(80, 16)
+	taglabel.Position = UDim2.fromOffset(8, -8)
+	taglabel.BackgroundColor3 = Color3.fromHSV(mainapi.GUIColor.Hue, mainapi.GUIColor.Sat, mainapi.GUIColor.Value)
+	taglabel.BorderSizePixel = 0
+	taglabel.Text = tag
+	taglabel.TextColor3 = Color3.new(1, 1, 1)
+	taglabel.TextSize = 9
+	taglabel.FontFace = uipallet.FontSemiBold
+	taglabel.Parent = notification
+	addCorner(taglabel, UDim.new(0, 4))
+	local close = Instance.new('ImageButton')
+	close.Name = 'Close'
+	close.Size = UDim2.fromOffset(14, 14)
+	close.Position = UDim2.new(1, -20, 0, 9)
+	close.BackgroundTransparency = 1
+	close.AutoButtonColor = false
+	close.Image = getcustomasset('skidv5/assets/new/close.png')
+	close.ImageColor3 = color.Dark(uipallet.Text, 0.43)
+	close.Parent = notification
+	local function reposition()
+		local count = 0
+		for i, v in notifications:GetChildren() do
+			if v:IsA('Frame') then
+				v.Position = UDim2.new(1, -(278), 0, 29 + (78 * count))
+				count = count + 1
 			end
-			task.wait(0.2)
-			notification:ClearAllChildren()
-			notification:Destroy()
+		end
+	end
+	notifications.ChildRemoved:Connect(function()
+		reposition()
+	end)
+	local function animate(to, done)
+		local start = tick()
+		local from = notification.Position.X.Offset
+		while tick() - start < 0.3 do
+			local t = (tick() - start) / 0.3
+			notification.Position = UDim2.new(1, from + ((to - from) * t), 0, notification.Position.Y.Offset)
+			task.wait()
+		end
+		notification.Position = UDim2.new(1, to, 0, notification.Position.Y.Offset)
+		if done then
+			done()
+		end
+	end
+	task.spawn(function()
+		animate(-278, function()
+			task.wait(time)
+			animate(-90, function()
+				notification:Destroy()
+			end)
 		end)
 	end)
+	close.MouseButton1Click:Connect(function()
+		notification:Destroy()
+	end)
+	return notification
 end
 
-function mainapi:Load(skipgui, profile)
-	if not skipgui then
-		self.GUIColor:SetValue(nil, nil, nil, 4)
+function mainapi:LoadOptions(tab, object)
+	if not tab then
+		return
 	end
-	local guidata = {}
-	local savecheck = true
-
-	if isfile('skidv5/profiles/'..game.GameId..'.gui.txt') then
-		guidata = loadJson('skidv5/profiles/'..game.GameId..'.gui.txt')
-		if not guidata then
-			guidata = {Categories = {}}
-			self:CreateNotification('SkidV5 Lite', 'Failed to load GUI settings.', 10, 'alert')
-			savecheck = false
-		end
-
-		if not skipgui then
-			-- `or self.Keybind` so a gui.txt without a Keybind cannot wipe the {'RightShift'}
-			-- default set at the top of this file. It reaches here as nil in two ordinary
-			-- cases -- the decode above failed and swapped in a bare {Categories = {}}, or
-			-- the file was written by a build/theme that never stored one -- and a nil here
-			-- used to leave the menu with no key that opens it.
-			self.Keybind = guidata.Keybind or self.Keybind
-			for i, v in guidata.Categories do
-				local object = self.Categories[i]
-				if not object then continue end
-				if object.Options and v.Options then
-					self:LoadOptions(object, v.Options)
-				end
-				if v.Enabled then
-					object.Button:Toggle()
-				end
-				if v.Pinned then
-					object:Pin()
-				end
-				if v.Expanded and object.Expand then
-					object:Expand()
-				end
-				if v.List and (#object.List > 0 or #v.List > 0) then
-					object.List = v.List or {}
-					object.ListEnabled = v.ListEnabled or {}
-					object:ChangeValue()
-				end
-				if v.Position then
-					object.Object.Position = UDim2.fromOffset(v.Position.X, v.Position.Y)
-				end
+	for i, v in object.Options do
+		if v.Load then
+			local saved = tab[i]
+			if saved then
+				pcall(v.Load, v, saved)
 			end
 		end
-	end
-
-	self.Profile = profile or guidata.Profile or 'default'
-	self.Profiles = guidata.Profiles or {{
-		Name = 'default', Bind = {}
-	}}
-	self.Categories.Profiles:ChangeValue()
-	if self.ProfileLabel then
-		self.ProfileLabel.Text = #self.Profile > 10 and self.Profile:sub(1, 10)..'...' or self.Profile
-		self.ProfileLabel.Size = UDim2.fromOffset(getfontsize(self.ProfileLabel.Text, self.ProfileLabel.TextSize, self.ProfileLabel.Font).X + 16, 24)
-	end
-
-	if isfile('skidv5/profiles/'..self.Profile..self.Place..'.txt') then
-		local savedata = loadJson('skidv5/profiles/'..self.Profile..self.Place..'.txt')
-		if not savedata then
-			savedata = {Categories = {}, Modules = {}, Legit = {}}
-			self:CreateNotification('SkidV5 Lite', 'Failed to load '..self.Profile..' profile.', 10, 'alert')
-			savecheck = false
-		end
-
-		for i, v in savedata.Categories do
-			local object = self.Categories[i]
-			if not object then continue end
-			if object.Options and v.Options then
-				self:LoadOptions(object, v.Options)
-			end
-			if v.Pinned ~= object.Pinned then
-				object:Pin()
-			end
-			if v.Expanded ~= nil and v.Expanded ~= object.Expanded then
-				object:Expand()
-			end
-			if object.Button and (v.Enabled or false) ~= object.Button.Enabled then
-				object.Button:Toggle()
-			end
-			if v.List and (#object.List > 0 or #v.List > 0) then
-				object.List = v.List or {}
-				object.ListEnabled = v.ListEnabled or {}
-				object:ChangeValue()
-			end
-			object.Object.Position = UDim2.fromOffset(v.Position.X, v.Position.Y)
-		end
-
-		for i, v in savedata.Modules do
-			local object = self.Modules[i]
-			if not object then continue end
-			if shared.VapeSmoothBoot then task.wait() end
-			if object.Options and v.Options then
-				self:LoadOptions(object, v.Options)
-			end
-			if v.Enabled ~= object.Enabled then
-				if skipgui then
-					if self.ToggleNotifications.Enabled then self:CreateNotification('Module Toggled', i.."<font color='#FFFFFF'> has been </font>"..(v.Enabled and "<font color='#5AFF5A'>Enabled</font>" or "<font color='#FF5A5A'>Disabled</font>").."<font color='#FFFFFF'>!</font>", 0.75) end
-				end
-				object:Toggle(true)
-			end
-			object:SetBind(v.Bind)
-			object.Object.Bind.Visible = #v.Bind > 0
-		end
-
-		for i, v in savedata.Legit do
-			local object = self.Legit.Modules[i]
-			if not object then continue end
-			if shared.VapeSmoothBoot then task.wait() end
-			if object.Options and v.Options then
-				self:LoadOptions(object, v.Options)
-			end
-			if object.Enabled ~= v.Enabled then
-				object:Toggle()
-			end
-			if v.Position and object.Children then
-				object.Children.Position = UDim2.fromOffset(v.Position.X, v.Position.Y)
-			end
-		end
-
-		self:UpdateTextGUI(true)
-	else
-		self:Save()
-	end
-
-	if self.Downloader then
-		self.Downloader:Destroy()
-		self.Downloader = nil
-	end
-	self.Loaded = savecheck
-	self.Categories.Main.Options.Bind:SetBind(self.Keybind)
-
-	if inputService.TouchEnabled and #self.Keybind == 1 and self.Keybind[1] == 'RightShift' then
-		local button = Instance.new('TextButton')
-		button.Size = UDim2.fromOffset(110, 110)
-		button.AnchorPoint = Vector2.new(0.5, 0)
-		button.Position = UDim2.new(0.5, 0, 0, 60)
-		button.BackgroundColor3 = Color3.new()
-		button.BackgroundTransparency = 0.5
-		button.Text = ''
-		-- Parented under scaledgui (which carries the `scale` UIScale), not the raw
-		-- `gui` ScreenGui the button used to sit in -- Offset sizes only shrink/grow
-		-- with the viewport for descendants of the scaled frame, so this was a fixed
-		-- 32x32 everywhere regardless of device. scaledgui itself is never hidden
-		-- (only ClickGui, nested inside it, is toggled), so this stays independent
-		-- of the modmenu's open/closed state exactly as before.
-		button.Parent = scaledgui
-		local image = Instance.new('ImageLabel')
-		image.AnchorPoint = Vector2.new(0.5, 0.5)
-		image.Size = UDim2.fromScale(0.8, 0.8)
-		image.Position = UDim2.fromScale(0.5, 0.5)
-		image.BackgroundTransparency = 1
-		image.Image = getcustomasset('skidv5/assets/new/vape.png')
-		image.Parent = button
-		local buttoncorner = Instance.new('UICorner')
-		buttoncorner.CornerRadius = UDim.new(1, 0)
-		buttoncorner.Parent = button
-		self.VapeButton = button
-		self.VapeButtonImage = image
-		self.VapeButtonTransparency = button.BackgroundTransparency
-		-- Options are already loaded by this point, so honour the saved setting on the
-		-- button we just built -- the toggle's own Function ran before it existed.
-		-- Transparency rather than Visible: see HideVapeButton.
-		if self.HideVapeButton and self.HideVapeButton.Enabled then
-			button.BackgroundTransparency = 1
-			image.ImageTransparency = 1
-		end
-		button.MouseButton1Click:Connect(function()
-			if self.ThreadFix then
-				setthreadidentity(8)
-			end
-			for _, v in self.Windows do
-				v.Visible = false
-			end
-			for _, mobileButton in self.Modules do
-				if mobileButton.Bind.Button then
-					mobileButton.Bind.Button.Visible = clickgui.Visible
-				end
-			end
-			clickgui.Visible = not clickgui.Visible
-			tooltip.Visible = false
-			self:BlurCheck()
-		end)
 	end
 end
 
-function mainapi:LoadOptions(object, savedoptions)
-	for i, v in savedoptions do
-		local option = object.Options[i]
-		if not option then continue end
-		option:Load(v)
-	end
-end
-
-function mainapi:Remove(obj)
-	local tab = (self.Modules[obj] and self.Modules or self.Legit.Modules[obj] and self.Legit.Modules or self.Categories)
-	if tab and tab[obj] then
-		local newobj = tab[obj]
-		if self.ThreadFix then
-			setthreadidentity(8)
-		end
-
-		for _, v in {'Object', 'Children', 'Toggle', 'Button'} do
-			local childobj = typeof(newobj[v]) == 'table' and newobj[v].Object or newobj[v]
-			if typeof(childobj) == 'Instance' then
-				childobj:Destroy()
-				childobj:ClearAllChildren()
-			end
-		end
-
-		loopClean(newobj)
-		tab[obj] = nil
-	end
-end
-
-function mainapi:Save(newprofile)
-	if not self.Loaded then return end
-	local guidata = {
-		Categories = {},
-		Profile = newprofile or self.Profile,
-		Profiles = self.Profiles,
-		Keybind = self.Keybind
-	}
-	local savedata = {
-		Modules = {},
-		Categories = {},
-		Legit = {}
-	}
-
-	for i, v in self.Categories do
-		(v.Type ~= 'Category' and i ~= 'Main' and savedata or guidata).Categories[i] = {
-			Enabled = i ~= 'Main' and v.Button.Enabled or nil,
-			Expanded = v.Type ~= 'Overlay' and v.Expanded or nil,
-			Pinned = v.Pinned,
-			Position = {X = v.Object.Position.X.Offset, Y = v.Object.Position.Y.Offset},
-			Options = mainapi:SaveOptions(v, v.Options),
-			List = v.List,
-			ListEnabled = v.ListEnabled
-		}
-	end
-
-	for i, v in self.Modules do
-		savedata.Modules[i] = {
-			Enabled = v.Enabled,
-			Bind = v.Bind.Button and {Mobile = true, X = v.Bind.Button.Position.X.Offset, Y = v.Bind.Button.Position.Y.Offset} or v.Bind,
-			Options = mainapi:SaveOptions(v, true)
-		}
-	end
-
-	for i, v in self.Legit.Modules do
-		savedata.Legit[i] = {
-			Enabled = v.Enabled,
-			Position = v.Children and {X = v.Children.Position.X.Offset, Y = v.Children.Position.Y.Offset} or nil,
-			Options = mainapi:SaveOptions(v, v.Options)
-		}
-	end
-
-	writefile('skidv5/profiles/'..game.GameId..'.gui.txt', httpService:JSONEncode(guidata))
-	writefile('skidv5/profiles/'..self.Profile..self.Place..'.txt', httpService:JSONEncode(savedata))
-end
-
--- Switch the active profile. Save(name) snapshots the outgoing profile's modules and
--- stamps the new name into <GameId>.gui.txt -- but Save gets replaced with a no-op
--- around config syncs, and Load(true) reads the active profile back OUT of gui.txt:
--- with Save dead, a switch would silently re-load the OLD profile and snap back.
--- Writing the name into gui.txt directly as well makes the switch stick no matter
--- what state Save is in (a plain re-write of the same value when Save worked).
 function mainapi:SetProfile(name)
-	pcall(function() self:Save(name) end)
-	pcall(function()
-		local guipath = 'skidv5/profiles/'..game.GameId..'.gui.txt'
-		local guidata = isfile(guipath) and loadJson(guipath)
-		if type(guidata) ~= 'table' then return end
-		if guidata.Profile ~= name then
-			guidata.Profile = name
-			writefile(guipath, httpService:JSONEncode(guidata))
-		end
-	end)
-	self:Load(true)
+	mainapi:Save(name)
+	mainapi:Load(true)
 end
 
-function mainapi:SaveOptions(object, savedoptions)
-	if not savedoptions then return end
-	savedoptions = {}
-	for _, v in object.Options do
-		if not v.Save then continue end
-		v:Save(savedoptions)
+function mainapi:Remove()
+	mainapi:Uninject()
+end
+
+function mainapi:Save(customProfile)
+	local save = {}
+	save.Modules = {}
+	save.Categories = {}
+	for i, v in mainapi.Modules do
+		local tosave = {
+			Enabled = v.Enabled,
+			Bind = v.Bind,
+			Options = {}
+		}
+		for j, o in v.Options do
+			if o.Save then
+				tosave.Options[j] = o:Save()
+			end
+		end
+		save.Modules[i] = tosave
 	end
-	return savedoptions
+	for i, v in mainapi.Categories do
+		if i ~= 'Main' then
+			local tosave = {}
+			if v.Type == 'Overlay' then
+				tosave.Enabled = v.Button.Enabled
+				tosave.Options = {}
+				for j, o in v.Options do
+					if o.Save then
+						tosave.Options[j] = o:Save()
+					end
+				end
+				tosave.Position = {X = v.Window.Position.X.Offset, Y = v.Window.Position.Y.Offset}
+				tosave.Pinned = v.Pinned
+			else
+				tosave.Options = {}
+				for j, o in v.Options do
+					if o.Save then
+						tosave.Options[j] = o:Save()
+					end
+				end
+				tosave.Position = {X = v.Window.Position.X.Offset, Y = v.Window.Position.Y.Offset}
+				tosave.List = table.clone(v.List)
+				tosave.ListEnabled = table.clone(v.ListEnabled)
+				tosave.Expanded = v.Expanded
+			end
+			save.Categories[i] = tosave
+		end
+	end
+	local dir = 'skidv5/profiles/'
+	if customProfile then
+		writefile(dir..customProfile..tostring(mainapi.Place)..'.txt', game:GetService('HttpService'):JSONEncode(save))
+	else
+		writefile(dir..tostring(mainapi.Place)..'.txt', game:GetService('HttpService'):JSONEncode(save))
+	end
+	mainapi:SaveOptions()
+end
+
+function mainapi:SaveOptions()
+	local save = {}
+	save.Profile = mainapi.Profile
+	save.Categories = {}
+	local maintab = {}
+	maintab.Options = {}
+	for i, v in mainapi.Categories.Main.Options do
+		if v.Save then
+			maintab.Options[i] = v:Save()
+		end
+	end
+	maintab.Position = {
+		X = clickgui.Position.X.Offset,
+		Y = clickgui.Position.Y.Offset,
+		XS = clickgui.Position.X.Scale,
+		YS = clickgui.Position.Y.Scale
+	}
+	save.Categories.Main = maintab
+	writefile('skidv5/gui.txt', game:GetService('HttpService'):JSONEncode(save))
+end
+
+function mainapi:Load(customProfile, setdefault)
+	local guidata = loadJson('skidv5/gui.txt')
+	if not guidata.Categories then
+		guidata = {}
+	end
+	customProfile = customProfile or guidata.Profile or 'default'
+	mainapi.Profile = customProfile
+	local profile = loadJson('skidv5/profiles/'..customProfile..tostring(mainapi.Place)..'.txt')
+	if not profile.Categories then
+		profile = loadJson('skidv5/profiles/'..tostring(mainapi.Place)..'.txt')
+	end
+	if not profile.Categories then
+		profile = {}
+	end
+	for i, v in mainapi.Modules do
+		local saved = profile.Modules and profile.Modules[v.Name]
+		if saved then
+			if v.Enabled and not saved.Enabled then
+				v:Toggle()
+			elseif not v.Enabled and saved.Enabled then
+				v:Toggle(true)
+			end
+			if v.Bind then
+				v.Bind = saved.Bind or v.Bind
+			end
+			mainapi:LoadOptions(saved.Options, v)
+		end
+	end
+	for i, v in mainapi.Categories do
+		if i ~= 'Main' then
+			local saved = profile.Categories and profile.Categories[i]
+			if saved then
+				if v.Type == 'Overlay' then
+					v:Load(saved)
+				else
+					mainapi:LoadOptions(saved.Options, v)
+					v.List = saved.List or {}
+					v.ListEnabled = saved.ListEnabled or {}
+					v.Expanded = saved.Expanded or false
+					v:ChangeValue()
+				end
+			end
+		end
+	end
+	local maintab = guidata.Categories and guidata.Categories.Main or {}
+	mainapi:LoadOptions(maintab.Options, mainapi.Categories.Main)
+	local pos = maintab.Position
+	if pos then
+		clickgui.Position = UDim2.new(pos.XS or 0, pos.X or 0, pos.YS or 0, pos.Y or 0)
+	end
+	if setdefault then
+		mainapi:Save()
+	end
+	mainapi.Loaded = true
+	if mainapi.Downloader then
+		mainapi.Downloader:Destroy()
+		mainapi.Downloader = nil
+	end
+	mainapi:UpdateTextGUI()
 end
 
 function mainapi:Uninject()
-	mainapi:Save()
-	mainapi.Loaded = nil
-	-- pcall each toggle: one module erroring mid-disable (e.g. LongJump/ProjectileAura
-	-- indexing a character that's already gone) must not skip Toggle() for every module
-	-- that comes after it in iteration order -- previously an uncaught error here would
-	-- abort this whole loop, leaving later modules (and the genv flags they own, like
-	-- IsLongJumping/ItemOwner) stuck in their "actively running" state across reinject.
-	for _, v in self.Modules do
+	for i, v in mainapi.Modules do
 		if v.Enabled then
-			pcall(function() v:Toggle() end)
+			v:Toggle()
 		end
 	end
-	for _, v in self.Legit.Modules do
-		if v.Enabled then
-			pcall(function() v:Toggle() end)
+	if mainapi.Legit then
+		for i, v in mainapi.Legit.Modules do
+			if v.Enabled then
+				v:Toggle()
+			end
 		end
 	end
-	for _, v in self.Categories do
+	for i, v in mainapi.Categories do
 		if v.Type == 'Overlay' and v.Button.Enabled then
-			pcall(function() v.Button:Toggle() end)
+			v.Button:Toggle()
 		end
 	end
-	for _, v in mainapi.Connections do
-		pcall(function()
-			v:Disconnect()
-		end)
+	for i, v in mainapi.Connections do
+		v:Disconnect()
 	end
-
-	-- Deterministic safety net: getgenv() persists across uninject/reinject by design
-	-- (that's why ItemOwner etc. live there instead of as plain locals),
-	-- so any of these left in an "active" state -- because a module wasn't Enabled at
-	-- uninject time, or its own Toggle() above still failed -- would otherwise leak
-	-- into the next injection and make LongJump/ProjectileAura/Killaura/AutoPearl think
-	-- an action is already in progress. Force them back to idle unconditionally.
-	pcall(function()
-		local genv = getgenv()
-		genv.IsLongJumping           = false
-		genv.LongJumpFireballThrown  = false
-		genv.ProjectileAuraFiringLock = false
-		genv.ItemOwner               = "none"
-	end)
+	table.clear(mainapi.Connections)
 	if mainapi.ThreadFix then
 		setthreadidentity(8)
 		clickgui.Visible = false
@@ -5798,123 +4575,9 @@ function mainapi:Uninject()
 	shared.VapeIndependent = nil
 end
 
-gui = Instance.new('ScreenGui')
-gui.Name = randomString()
-gui.DisplayOrder = 9999999
-gui.ZIndexBehavior = Enum.ZIndexBehavior.Global
-gui.IgnoreGuiInset = true
-gui.OnTopOfCoreBlur = true
-if mainapi.ThreadFix then
-	gui.Parent = cloneref(game:GetService('CoreGui'))--(gethui and gethui()) or cloneref(game:GetService('CoreGui'))
-else
-	gui.Parent = cloneref(game:GetService('Players')).LocalPlayer.PlayerGui
-	gui.ResetOnSpawn = false
-end
-mainapi.gui = gui
-scaledgui = Instance.new('Frame')
-scaledgui.Name = 'ScaledGui'
-scaledgui.Size = UDim2.fromScale(1, 1)
-scaledgui.BackgroundTransparency = 1
-scaledgui.Parent = gui
-clickgui = Instance.new('Frame')
-clickgui.Name = 'ClickGui'
-clickgui.Size = UDim2.fromScale(1, 1)
-clickgui.BackgroundTransparency = 1
-clickgui.Visible = false
-clickgui.Parent = scaledgui
-local scarcitybanner = Instance.new('TextLabel')
-scarcitybanner.Size = UDim2.fromScale(1, 0.02)
-scarcitybanner.Position = UDim2.fromScale(0, 0.97)
-scarcitybanner.BackgroundTransparency = 1
-scarcitybanner.Text = 'A new discord has been created, click the discord icon to join.'
-scarcitybanner.TextScaled = true
-scarcitybanner.TextColor3 = Color3.new(1, 1, 1)
-scarcitybanner.TextStrokeTransparency = 0.5
-scarcitybanner.FontFace = uipallet.Font
-scarcitybanner.Parent = clickgui
-local modal = Instance.new('TextButton')
-modal.BackgroundTransparency = 1
-modal.Modal = true
-modal.Text = ''
-modal.Parent = clickgui
-local cursor = Instance.new('ImageLabel')
-cursor.Size = UDim2.fromOffset(64, 64)
-cursor.BackgroundTransparency = 1
-cursor.Visible = false
-cursor.Image = 'rbxasset://textures/Cursors/KeyboardMouse/ArrowFarCursor.png'
-cursor.Parent = gui
-notifications = Instance.new('Folder')
-notifications.Name = 'Notifications'
-notifications.Parent = scaledgui
-tooltip = Instance.new('TextLabel')
-tooltip.Name = 'Tooltip'
-tooltip.Position = UDim2.fromScale(-1, -1)
-tooltip.ZIndex = 5
-tooltip.BackgroundColor3 = color.Dark(uipallet.Main, 0.02)
-tooltip.Visible = false
-tooltip.Text = ''
-tooltip.TextColor3 = color.Dark(uipallet.Text, 0.16)
-tooltip.TextSize = 12
-tooltip.FontFace = uipallet.Font
-tooltip.Parent = scaledgui
-toolblur = addBlur(tooltip)
-addCorner(tooltip)
-local toolstrokebkg = Instance.new('Frame')
-toolstrokebkg.Size = UDim2.new(1, -2, 1, -2)
-toolstrokebkg.Position = UDim2.fromOffset(1, 1)
-toolstrokebkg.ZIndex = 6
-toolstrokebkg.BackgroundTransparency = 1
-toolstrokebkg.Parent = tooltip
-local toolstroke = Instance.new('UIStroke')
-toolstroke.Color = color.Light(uipallet.Main, 0.02)
-toolstroke.Parent = toolstrokebkg
-addCorner(toolstrokebkg, UDim.new(0, 4))
-scale = Instance.new('UIScale')
-scale.Scale = math.clamp(gameCamera.ViewportSize.X / 1920, 0.5, 1)
-scale.Parent = scaledgui
-mainapi.guiscale = scale
-scaledgui.Size = UDim2.fromScale(1 / scale.Scale, 1 / scale.Scale)
-
-mainapi:Clean(gameCamera:GetPropertyChangedSignal('ViewportSize'):Connect(function()
-	if mainapi.Scale.Enabled then
-		scale.Scale = math.clamp(gameCamera.ViewportSize.X / 1920, 0.5, 1)
-	end
-end))
-
-mainapi:Clean(scale:GetPropertyChangedSignal('Scale'):Connect(function()
-	scaledgui.Size = UDim2.fromScale(1 / scale.Scale, 1 / scale.Scale)
-	for _, v in scaledgui:GetDescendants() do
-		if v:IsA('GuiObject') and v.Visible then
-			v.Visible = false
-			v.Visible = true
-		end
-	end
-end))
-
-mainapi:Clean(clickgui:GetPropertyChangedSignal('Visible'):Connect(function()
-	mainapi:UpdateGUI(mainapi.GUIColor.Hue, mainapi.GUIColor.Sat, mainapi.GUIColor.Value, true)
-	if clickgui.Visible and inputService.MouseEnabled then
-		repeat
-			local visibleCheck = clickgui.Visible
-			for _, v in mainapi.Windows do
-				visibleCheck = visibleCheck or v.Visible
-			end
-			if not visibleCheck then break end
-
-			cursor.Visible = not inputService.MouseIconEnabled
-			if cursor.Visible then
-				local mouseLocation = inputService:GetMouseLocation()
-				cursor.Position = UDim2.fromOffset(mouseLocation.X - 31, mouseLocation.Y - 32)
-			end
-
-			task.wait()
-		until mainapi.Loaded == nil
-		cursor.Visible = false
-	end
-end))
-
+mainapi:CreateLegit()
 mainapi:CreateGUI()
-mainapi.Categories.Main:CreateDivider()
+
 mainapi:CreateCategory({
 	Name = 'Combat',
 	Icon = getcustomasset('skidv5/assets/new/combaticon.png'),
@@ -5945,11 +4608,7 @@ mainapi:CreateCategory({
 	Icon = getcustomasset('skidv5/assets/new/miniicon.png'),
 	Size = UDim2.fromOffset(19, 12)
 })
-mainapi.Categories.Main:CreateDivider('misc')
 
---[[
-	Friends
-]]
 local friends
 local friendscolor = {
 	Hue = 1,
@@ -5968,8 +4627,6 @@ local friendssettings = {
 	end
 }
 friends = mainapi:CreateCategoryList(friendssettings)
-friends.Update = Instance.new('BindableEvent')
-friends.ColorUpdate = Instance.new('BindableEvent')
 friends:CreateToggle({
 	Name = 'Recolor visuals',
 	Darker = true,
@@ -5987,7 +4644,6 @@ friendscolor = friends:CreateColorSlider({
 			local dot = v:FindFirstChild('Dot')
 			if dot and dot.BackgroundColor3 ~= color.Light(uipallet.Main, 0.37) then
 				dot.BackgroundColor3 = Color3.fromHSV(hue, sat, val)
-				dot.Dot.BackgroundColor3 = dot.BackgroundColor3
 			end
 		end
 		friendssettings.Color = Color3.fromHSV(hue, sat, val)
@@ -6003,389 +4659,16 @@ friends:CreateToggle({
 		friends.ColorUpdate:Fire(friendscolor.Hue, friendscolor.Sat, friendscolor.Value)
 	end
 })
-mainapi:Clean(friends.Update)
-mainapi:Clean(friends.ColorUpdate)
 
---[[
-	Profiles
-]]
-local profilescategory = mainapi:CreateCategoryList({
+mainapi:CreateCategoryList({
 	Name = 'Profiles',
 	Icon = getcustomasset('skidv5/assets/new/profilesicon.png'),
 	Size = UDim2.fromOffset(17, 10),
-	Position = UDim2.fromOffset(12, 16),
 	Placeholder = 'Type name',
 	Profiles = true
 })
+mainapi.Profiles = mainapi.Categories.Profiles
 
--- Redownloads pistonware/profiles the way loader.lua does on a first install: every file the
--- repo keeps in that folder, pulled from the raw host through the same 4-attempt retry (raw
--- hosts 504 intermittently, and an empty body would otherwise land as a corrupt file).
--- Two things differ from loader.lua's downloadFile, both required for a sync rather than an
--- install: it writes over files that already exist (downloadFile skips those, which for a
--- sync would download nothing at all), and nothing is filtered out. <GameId>.gui.txt carries
--- the config's GUI theme colour and window layout, so holding it back was what made a synced
--- config come back looking exactly like the one it replaced.
--- pistonware/profiles is stamped with the commit it was pulled from, so a sync that would
--- change nothing can be turned away before it spends any requests finding that out. Nothing
--- else in the codebase reads profilecommit.txt; this is what writes it.
-local function localProfileCommit()
-	local suc, res = pcall(readfile, 'skidv5/profiles/profilecommit.txt')
-	if not (suc and type(res) == 'string') then return nil end
-	res = res:gsub('%s', '')
-	return res ~= '' and res or nil
-end
-
-local function latestProfileCommit()
-	local suc, res = pcall(function()
-		return game:HttpGet('https://api.github.com/repos/skidforce/skidv5/commits?path=profiles&sha=main&per_page=1', true)
-	end)
-	if not (suc and res and res ~= '' and res ~= '404: Not Found') then return nil end
-	local ok, body = pcall(function()
-		return httpService:JSONDecode(res)
-	end)
-	if not (ok and typeof(body) == 'table' and body[1] and type(body[1].sha) == 'string') then return nil end
-	return body[1].sha
-end
-
--- Being on the latest commit is not enough on its own: the sync exists to put both shipped
--- configs for this place on disk, so a missing one has to let it through regardless.
-local function hasLegitConfig()
-	return isfile('skidv5/profiles/legit'..mainapi.Place..'.txt')
-end
-
--- Pinned to the commit the check reported rather than to the branch path: raw.githubusercontent
--- serves CDN-cached content for a few minutes after a push, so a branch-head fetch can quietly
--- reinstall the old profiles and then get stamped with the new commit, blocking every later sync.
-local function downloadProfileFile(path, commit)
-	local relPath = select(1, path:gsub('skidv5/', ''))
-	local content
-	for attempt = 1, 4 do
-		local suc, res = pcall(function()
-			return game:HttpGet('https://raw.githubusercontent.com/skidforce/skidv5/'..(commit or 'main')..'/'..relPath, true)
-		end)
-		if suc and res and res ~= '' and res ~= '404: Not Found' then
-			content = res
-			break
-		end
-		if attempt < 4 then
-			task.wait(attempt)
-		end
-	end
-	if not content then return false end
-	-- <GameId>.gui.txt is the GUI's state file, not a config: besides the theme and window
-	-- layout it holds `Profile` (the equipped config) and `Profiles` (the list shown in the
-	-- Profiles tab, custom ones included). Writing the repo's copy over it wiped every custom
-	-- profile from the list and forced the equipped config back to whatever shipped. Merge so
-	-- the theme still syncs but those two fields stay local -- only shipped configs get replaced.
-	if path:find('%.gui%.txt$') then
-		local ok, merged = pcall(function()
-			local new = httpService:JSONDecode(content)
-			if type(new) ~= 'table' then return content end
-			if isfile(path) then
-				local old = httpService:JSONDecode(readfile(path))
-				if type(old) == 'table' then
-					if old.Profiles ~= nil then new.Profiles = old.Profiles end
-					if old.Profile ~= nil then new.Profile = old.Profile end
-				end
-			end
-			return httpService:JSONEncode(new)
-		end)
-		if ok and type(merged) == 'string' then
-			content = merged
-		end
-	end
-	return (pcall(writefile, path, content))
-end
-
-local function downloadProfiles(commit)
-	local reqSuc, res = pcall(function()
-		-- listing pinned too, so it can never describe a different commit than the files below
-		return game:HttpGet('https://api.github.com/repos/skidforce/skidv5/contents/profiles'..(commit and ('?ref='..commit) or ''), true)
-	end)
-	if not (reqSuc and res and res ~= '' and res ~= '404: Not Found') then
-		return nil, 'Profile sync failed (could not reach GitHub).'
-	end
-
-	local bodySuc, body = pcall(function()
-		return httpService:JSONDecode(res)
-	end)
-	if not (bodySuc and typeof(body) == 'table') then
-		return nil, 'Profile sync failed (unreadable response).'
-	end
-
-	local files = {}
-	for _, v in body do
-		if v.type == 'file' and not v.name:match('^blatant') then
-			table.insert(files, v)
-		end
-	end
-	if #files <= 0 then
-		return nil, 'Profile sync failed (the repo has no profiles).'
-	end
-
-	-- Downloaded in parallel like the loader does, rather than one blocking request per file.
-	local synced, failed, waiting = 0, 0, #files
-	local done = Instance.new('BindableEvent')
-	for _, v in files do
-		task.spawn(function()
-			if downloadProfileFile('skidv5/'.. ({v.path:gsub(' ', '%%20')})[1], commit) then
-				synced += 1
-			else
-				failed += 1
-			end
-			waiting -= 1
-			if waiting <= 0 then
-				done:Fire()
-			end
-		end)
-	end
-	if waiting > 0 then
-		done.Event:Wait()
-	end
-	done:Destroy()
-
-	if synced <= 0 then
-		return nil, 'Profile sync failed (nothing downloaded).'
-	end
-	return synced, 'Synced '..synced..' file'..(synced == 1 and '' or 's')..' from GitHub'..(failed > 0 and ' ('..failed..' failed).' or '.')
-end
-
-do
-	local syncing = false
-	-- Set once a download lands. From then until a config is picked the buttons below own the
-	-- reinject, so syncing and choosing stay one flow rather than two reloads.
-	local pending, syncmessage = false, nil
-	local refreshConfigButtons
-	-- Tracked because the recolour below runs on every rainbow tick and would otherwise
-	-- overwrite whatever MouseEnter/MouseLeave just set.
-	local synchovered = false
-	local children = profilescategory.Object:FindFirstChild('Children')
-	local syncbutton = Instance.new('TextButton')
-	syncbutton.Name = 'SyncProfiles'
-	-- ChangeValue rebuilds the profile entries from scratch on every add/remove, so this sits
-	-- outside that list with a LayoutOrder that keeps it pinned underneath them.
-	syncbutton.LayoutOrder = 999
-	syncbutton.Size = UDim2.fromOffset(200, 33)
-	syncbutton.BackgroundColor3 = color.Light(uipallet.Main, 0.02)
-	syncbutton.AutoButtonColor = false
-	syncbutton.Text = 'Sync to current profiles'
-	-- Static black, and never touched again: the background under it is the GUI colour now,
-	-- so anything that varied with the colour or with hover read as the label flickering.
-	syncbutton.TextColor3 = Color3.new(0, 0, 0)
-	syncbutton.TextSize = 15
-	syncbutton.FontFace = uipallet.Font
-	syncbutton.Parent = children
-	addCorner(syncbutton)
-	addTooltip(syncbutton, 'Redownloads the profiles from GitHub, then pick a config below to load one')
-
-	-- Flag only. The tween these used to run fought recolorProfileCards, which rewrites this
-	-- background every rainbow tick: leaving the button started a tween back to the flat
-	-- grey while the tick kept writing the colour, and the two took turns each frame.
-	-- The hover shade is applied by the tick instead, off this flag.
-	syncbutton.MouseEnter:Connect(function()
-		synchovered = true
-	end)
-	syncbutton.MouseLeave:Connect(function()
-		synchovered = false
-	end)
-	syncbutton.MouseButton1Click:Connect(function()
-		if syncing then return end
-		syncing = true
-		syncbutton.Text = 'Checking...'
-
-		-- One request to compare commits, rather than a dozen to redownload files that have not
-		-- moved. GitHub allows 60 unauthenticated API calls an hour and a few reinjects can spend
-		-- that, so a folder that is already current is turned away before the listing request.
-		local latest = latestProfileCommit()
-		if latest and latest == localProfileCommit() and hasLegitConfig() then
-			syncing = false
-			syncbutton.Text = 'Profiles already up to date'
-			mainapi:CreateNotification('SkidV5 Lite', 'Profiles are already on the latest commit, nothing to sync.', 10)
-			return
-		end
-
-		syncbutton.Text = 'Syncing...'
-		-- Flush what is in memory first so a download that only half lands cannot strand the
-		-- GUI between two states -- whatever does arrive replaces this a moment later.
-		pcall(function() mainapi:Save() end)
-
-		local synced, message = downloadProfiles(latest)
-		syncing = false
-		if not synced then
-			syncbutton.Text = 'Sync to current profiles'
-			mainapi:CreateNotification('SkidV5 Lite', message, 10, 'alert')
-			return
-		end
-		-- Stamped only once the files are down, and only when the commit was readable in the first
-		-- place, so a half-finished or unverified sync still re-checks next time.
-		if latest then
-			pcall(writefile, 'skidv5/profiles/profilecommit.txt', latest)
-		end
-
-		-- Saving stops here rather than at the reload. main.lua autosaves every few seconds, and
-		-- now that the reload waits on a click, that tick would write the pre-sync state back over
-		-- the files that were just downloaded -- which is exactly how a synced config came back
-		-- wearing the old GUI colour.
-		mainapi.Save = function() end
-
-		-- Downloaded, but nothing is loaded yet: the files are settings on disk until something
-		-- reads them. Picking a config below is what reloads onto them.
-		pending, syncmessage = true, message
-		syncbutton.Text = 'Synced, choose a config'
-		refreshConfigButtons()
-		mainapi:CreateNotification('SkidV5 Lite', message..' Choose a config below to load one.', 10)
-	end)
-
-	-- Which shipped config loads by default. There is nothing extra to persist: the default is
-	-- simply the active profile, which Save already records in gui.txt, so it is what a plain
-	-- reinject (and the sync above) comes back to.
-	local defaultrow = Instance.new('Frame')
-	defaultrow.Name = 'DefaultConfig'
-	defaultrow.LayoutOrder = 1000
-	defaultrow.Size = UDim2.fromOffset(200, 33)
-	defaultrow.BackgroundTransparency = 1
-	defaultrow.Parent = children
-
-	local configbuttons = {}
-	-- Colour only, and deliberately split from refreshConfigButtons: that one stats the
-	-- profile files to decide what is offered, and this runs on every rainbow tick --
-	-- at the default 60hz the combined version would be 120 isfile calls a second.
-	--
-	-- Registered on mainapi so UpdateGUI can reach it: UpdateGUI is defined at file scope,
-	-- well outside this block, and is the only thing that runs per rainbow tick.
-	local function recolorProfileCards()
-		for name, button in configbuttons do
-			local selected = mainapi.Profile == name and not pending
-			button.BackgroundColor3 = selected and Color3.fromHSV(mainapi.GUIColor.Hue, mainapi.GUIColor.Sat, mainapi.GUIColor.Value) or color.Light(uipallet.Main, 0.02)
-			-- while a sync is waiting on a choice both read as live options, not one active one
-			-- Fixed black rather than mainapi:TextColor: that picks dark or white from the
-			-- colour's brightness, and a rainbow sweeps across its threshold several times a
-			-- cycle, so the label flipped between the two every few frames.
-			button.TextColor3 = selected and Color3.new(0, 0, 0) or (pending and uipallet.Text or color.Dark(uipallet.Text, 0.4))
-		end
-		-- The button takes the GUI colour, its label stays black. Hover is a shade of the same
-		-- colour applied here rather than a tween, so there is only ever one writer.
-		local synccolor = Color3.fromHSV(mainapi.GUIColor.Hue, mainapi.GUIColor.Sat, mainapi.GUIColor.Value)
-		syncbutton.BackgroundColor3 = synchovered and color.Light(synccolor, 0.12) or synccolor
-	end
-	mainapi.RecolorProfileCards = recolorProfileCards
-
-	function refreshConfigButtons()
-		local anyvisible = false
-		for name, button in configbuttons do
-			-- A config can only be offered once its file is on disk: before the first sync there
-			-- may be none at all, so the row hides itself rather than showing a button whose only
-			-- possible answer is an error.
-			button.Visible = pending or isfile('skidv5/profiles/'..name..mainapi.Place..'.txt')
-			anyvisible = anyvisible or button.Visible
-		end
-		-- an invisible row is skipped by the list layout, so the gap closes with it
-		defaultrow.Visible = anyvisible
-		recolorProfileCards()
-	end
-
-	local function selectConfig(name)
-		if not isfile('skidv5/profiles/'..name..mainapi.Place..'.txt') then
-			mainapi:CreateNotification('SkidV5 Lite', 'There is no '..name..' config for this game yet, press Sync to current profiles first.', 10, 'alert')
-			return
-		end
-		-- Always a full reload, never an in-place profile switch. The GUI theme colour, window
-		-- layout and keybind live in <GameId>.gui.txt, and Load(true) -- what the profile entries
-		-- use -- deliberately skips that file, so switching in place brings the config's modules
-		-- across but leaves the GUI dressed as whatever it replaced.
-		pending = false
-		syncbutton.Text = 'Reloading...'
-		-- On a plain switch this flushes anything newer than the last autosave into the profile
-		-- being left behind. After a sync it is deliberately a no-op: Save was already neutered
-		-- when the download landed, which is what keeps those files intact until they are read.
-		pcall(function() mainapi:Save() end)
-		mainapi.Save = function() end
-		-- Save is off now and the reload reads the profile list back out of gui.txt, so the chosen
-		-- config has to be written in there directly. Going through Save instead would rewrite the
-		-- profile file a download just refreshed.
-		pcall(function()
-			local guipath = 'skidv5/profiles/'..game.GameId..'.gui.txt'
-			local guidata = isfile(guipath) and loadJson(guipath)
-			if type(guidata) ~= 'table' then return end
-			guidata.Profiles = guidata.Profiles or {}
-			local listed = false
-			for _, v in guidata.Profiles do
-				if v.Name == name then
-					listed = true
-					break
-				end
-			end
-			if not listed then
-				table.insert(guidata.Profiles, {Name = name, Bind = {}})
-			end
-			guidata.Profile = name
-			writefile(guipath, httpService:JSONEncode(guidata))
-		end)
-		-- nil unless a sync is being finished off, which is the only time main.lua should report one
-		shared.SkidV5SyncResult = syncmessage
-		shared.VapeCustomProfile = name
-		shared.vapereload = true
-		if shared.SkidV5Developer then
-			loadstring(readfile('skidv5/loader.lua'), 'loader')()
-		else
-			loadstring(game:HttpGet('https://raw.githubusercontent.com/skidforce/skidv5/main/loader.lua', true))()
-		end
-	end
-
-	for index, config in {{Key = 'legit', Text = 'Legit'}} do
-		local name = config.Key
-		local button = Instance.new('TextButton')
-		button.Name = name
-		-- Half of the sync button each, with a 4px gutter, so the pair lines up with it exactly.
-		button.Size = UDim2.fromOffset(98, 33)
-		button.Position = UDim2.fromOffset((index - 1) * 102, 0)
-		button.BackgroundColor3 = color.Light(uipallet.Main, 0.02)
-		button.AutoButtonColor = false
-		button.Text = config.Text
-		button.TextColor3 = color.Dark(uipallet.Text, 0.4)
-		button.TextSize = 15
-		button.FontFace = uipallet.Font
-		button.Parent = defaultrow
-		addCorner(button)
-		addTooltip(button, 'Load the '..config.Text..' config by default')
-		configbuttons[name] = button
-
-		button.MouseEnter:Connect(function()
-			if mainapi.Profile == name and not pending then return end
-			button.TextColor3 = uipallet.Text
-			tween:Tween(button, uipallet.Tween, {
-				BackgroundColor3 = color.Light(uipallet.Main, 0.14)
-			})
-		end)
-		button.MouseLeave:Connect(function()
-			if mainapi.Profile == name and not pending then return end
-			button.TextColor3 = color.Dark(uipallet.Text, 0.4)
-			tween:Tween(button, uipallet.Tween, {
-				BackgroundColor3 = color.Light(uipallet.Main, 0.02)
-			})
-		end)
-		button.MouseButton1Click:Connect(function()
-			selectConfig(name)
-		end)
-	end
-
-	-- Load is the one place that settles which profile is active -- first inject, reinject, or a
-	-- click on a profile entry -- so the highlight follows it instead of being poked from each
-	-- of those callers.
-	local loadprofile = mainapi.Load
-	function mainapi:Load(...)
-		loadprofile(self, ...)
-		refreshConfigButtons()
-	end
-	-- picks up a GUI colour change made while the tab was closed
-	defaultrow.MouseEnter:Connect(refreshConfigButtons)
-	refreshConfigButtons()
-end
-
---[[
-	Targets
-]]
 local targets
 targets = mainapi:CreateCategoryList({
 	Name = 'Targets',
@@ -6396,19 +4679,34 @@ targets = mainapi:CreateCategoryList({
 		targets.Update:Fire()
 	end
 })
-targets.Update = Instance.new('BindableEvent')
-mainapi:Clean(targets.Update)
 
-mainapi:CreateLegit()
-mainapi:CreateSearch()
-mainapi.Categories.Main:CreateOverlayBar()
-mainapi.Categories.Main:CreateSettingsDivider()
+mainapi:CreateOverlayBar()
 
---[[
-	General Settings
-]]
+for i, v in mainapi.Categories do
+	if v.Name ~= 'Main' then
+		mainapi.Categories.Main:CreateButton({
+			Name = v.Name,
+			Icon = v.Icon,
+			Size = v.Size,
+			Window = v.Window
+		})
+	end
+end
+mainapi.OverlaysButton = mainapi.Categories.Main:CreateButton({
+	Name = 'Overlays',
+	Icon = getcustomasset('skidv5/assets/new/overlaysicon.png'),
+	Size = UDim2.fromOffset(16, 16),
+	NoRadio = true,
+	Window = mainapi.Overlaybar
+})
+mainapi.LegitButton = mainapi.Categories.Main:CreateButton({
+	Name = 'Legit',
+	Icon = getcustomasset('skidv5/assets/new/legit.png'),
+	Size = UDim2.fromOffset(16, 16),
+	Window = mainapi.Legit.Window
+})
 
-local general = mainapi.Categories.Main:CreateSettingsPane({Name = 'General'})
+local general = mainapi.Categories.Main:CreateSettingsPane('General')
 mainapi.MultiKeybind = general:CreateToggle({
 	Name = 'Enable Multi-Keybinding',
 	Tooltip = 'Allows multiple keys to be bound to a module (eg. G + H)'
@@ -6416,15 +4714,15 @@ mainapi.MultiKeybind = general:CreateToggle({
 general:CreateButton({
 	Name = 'Reset current profile',
 	Function = function()
-	mainapi.Save = function() end
-		if isfile('skidv5/profiles/'..mainapi.Profile..mainapi.Place..'.txt') and delfile then
-			delfile('skidv5/profiles/'..mainapi.Profile..mainapi.Place..'.txt')
+		mainapi.Save = function() end
+		if isfile('skidv5/profiles/'..mainapi.Profile..tostring(mainapi.Place)..'.txt') and delfile then
+			delfile('skidv5/profiles/'..mainapi.Profile..tostring(mainapi.Place)..'.txt')
 		end
 		shared.vapereload = true
 		if shared.SkidV5Developer then
 			loadstring(readfile('skidv5/loader.lua'), 'loader')()
 		else
-			loadstring(game:HttpGet('https://raw.githubusercontent.com/skidforce/skidv5/main/loader.lua', true))()
+			loadstring(game:HttpGet('https://raw.githubusercontent.com/skidforce/skidv5lite/main/loader.lua', true))()
 		end
 	end,
 	Tooltip = 'This will set your profile to the default settings of Vape'
@@ -6443,24 +4741,13 @@ general:CreateButton({
 		if shared.SkidV5Developer then
 			loadstring(readfile('skidv5/loader.lua'), 'loader')()
 		else
-			loadstring(game:HttpGet('https://raw.githubusercontent.com/skidforce/skidv5/main/loader.lua', true))()
+			loadstring(game:HttpGet('https://raw.githubusercontent.com/skidforce/skidv5lite/main/loader.lua', true))()
 		end
 	end,
 	Tooltip = 'Reloads vape for debugging purposes'
 })
-general:CreateButton({
-	Name = 'Reinstall',
-	Function = function()
-		loadstring(game:HttpGet('https://raw.githubusercontent.com/skidforce/skidv5/refs/heads/main/reinstall.lua', true))()
-	end,
-	Tooltip = 'Uninjects, deletes the skidv5 folder and downloads everything again'
-})
 
---[[
-	Module Settings
-]]
-
-local modules = mainapi.Categories.Main:CreateSettingsPane({Name = 'Modules'})
+local modules = mainapi.Categories.Main:CreateSettingsPane('Modules')
 modules:CreateToggle({
 	Name = 'Teams by server',
 	Tooltip = 'Ignore players on your team designated by the server',
@@ -6482,11 +4769,7 @@ modules:CreateToggle({
 	end
 })
 
---[[
-	GUI Settings
-]]
-
-local guipane = mainapi.Categories.Main:CreateSettingsPane({Name = 'GUI'})
+local guipane = mainapi.Categories.Main:CreateSettingsPane('GUI')
 mainapi.Blur = guipane:CreateToggle({
 	Name = 'Blur background',
 	Function = function()
@@ -6512,35 +4795,38 @@ guipane:CreateToggle({
 guipane:CreateToggle({
 	Name = 'Show legit mode',
 	Function = function(enabled)
-		clickgui.Search.Legit.Visible = enabled
-		clickgui.Search.LegitDivider.Visible = enabled
-		clickgui.Search.TextBox.Size = UDim2.new(1, enabled and -50 or -10, 0, 37)
-		clickgui.Search.TextBox.Position = UDim2.fromOffset(enabled and 50 or 10, 0)
+		clickgui.Search.Background.Legit.Visible = enabled
+		clickgui.Search.Background.LegitDivider.Visible = enabled
+		clickgui.Search.Background.TextBox.Size = UDim2.new(1, enabled and -86 or -44, 1, 0)
+		if mainapi.LegitButton then
+			mainapi.LegitButton.Object.Visible = enabled
+		end
 	end,
 	Default = true,
 	Tooltip = 'Shows the button to change to Legit Mode'
 })
 local scaleslider = {Object = {}, Value = 1}
-mainapi.Scale = guipane:CreateToggle({
+local autoscale = guipane:CreateToggle({
 	Name = 'Auto rescale',
 	Default = true,
 	Function = function(callback)
 		scaleslider.Object.Visible = not callback
 		if callback then
-			scale.Scale = math.clamp(gameCamera.ViewportSize.X / 1920, 0.4, 1)
+			scale.Scale = math.max(gui.AbsoluteSize.X / 1920, 0.6)
 		else
 			scale.Scale = scaleslider.Value
 		end
 	end,
 	Tooltip = 'Automatically rescales the gui using the screens resolution'
 })
+mainapi.Scale = autoscale
 scaleslider = guipane:CreateSlider({
 	Name = 'Scale',
 	Min = 0.1,
 	Max = 2,
 	Decimal = 10,
 	Function = function(val, final)
-		if final and not mainapi.Scale.Enabled then
+		if final and not autoscale.Enabled then
 			scale.Scale = val
 		end
 	end,
@@ -6548,109 +4834,8 @@ scaleslider = guipane:CreateSlider({
 	Darker = true,
 	Visible = false
 })
-mainapi.HideVapeButton = guipane:CreateToggle({
-	Name = 'Hide SkidV5 Mobile Button',
-	Function = function(callback)
-		-- Drops the transparencies rather than flipping Visible. An invisible
-		-- GuiObject stops hit-testing in Roblox, so hiding the button used to take
-		-- its tap target with it and the only way back into the GUI was the keybind
-		-- -- which mobile doesn't have. Fully transparent still receives input, so
-		-- the button keeps opening the menu from exactly where it always sat.
-		if mainapi.VapeButton then
-			mainapi.VapeButton.BackgroundTransparency = callback and 1 or (mainapi.VapeButtonTransparency or 0)
-			if mainapi.VapeButtonImage then
-				mainapi.VapeButtonImage.ImageTransparency = callback and 1 or 0
-			end
-		end
-	end,
-	Tooltip = 'Makes the SkidV5 button invisible on mobile\nIt still opens the GUI when tapped'
-})
-guipane:CreateDropdown({
-	Name = 'GUI Theme',
-	List = inputService.TouchEnabled and {'new', 'old'} or {'new', 'old', 'rise'},
-	Function = function(val, mouse)
-		if mouse then
-			writefile('skidv5/profiles/gui.txt', val)
-			shared.vapereload = true
-			if shared.SkidV5Developer then
-				loadstring(readfile('skidv5/loader.lua'), 'loader')()
-			else
-				loadstring(game:HttpGet('https://raw.githubusercontent.com/skidforce/skidv5/main/loader.lua', true))()
-			end
-		end
-	end,
-	Tooltip = 'new - The newest vape theme to since v4.05\nold - The vape theme pre v4.05\nrise - Rise 6.0'
-})
-mainapi.RainbowMode = guipane:CreateDropdown({
-	Name = 'Rainbow Mode',
-	List = {'Normal', 'Gradient', 'Retro'},
-	Tooltip = 'Normal - Smooth color fade\nGradient - Gradient color fade\nRetro - Static color'
-})
-mainapi.RainbowSpeed = guipane:CreateSlider({
-	Name = 'Rainbow speed',
-	Min = 0.1,
-	Max = 10,
-	Decimal = 10,
-	Default = 1,
-	Tooltip = 'Adjusts the speed of rainbow values'
-})
-mainapi.RainbowUpdateSpeed = guipane:CreateSlider({
-	Name = 'Rainbow update rate',
-	Min = 1,
-	Max = 144,
-	Default = 60,
-	Tooltip = 'Adjusts the update rate of rainbow values',
-	Suffix = 'hz'
-})
-guipane:CreateButton({
-	Name = 'Reset GUI positions',
-	Function = function()
-		for _, v in mainapi.Categories do
-			v.Object.Position = UDim2.fromOffset(6, 42)
-		end
-	end,
-	Tooltip = 'This will reset your GUI back to default'
-})
-guipane:CreateButton({
-	Name = 'Sort GUI',
-	Function = function()
-		local priority = {
-			GUICategory = 1,
-			CombatCategory = 2,
-			RenderCategory = 3,
-			UtilityCategory = 4,
-			WorldCategory = 5,
-			InventoryCategory = 6,
-			MinigamesCategory = 7,
-			FriendsCategory = 8,
-			ProfilesCategory = 9
-		}
-		local categories = {}
-		for _, v in mainapi.Categories do
-			if v.Type ~= 'Overlay' then
-				table.insert(categories, v)
-			end
-		end
-		table.sort(categories, function(a, b)
-			return (priority[a.Object.Name] or 99) < (priority[b.Object.Name] or 99)
-		end)
 
-		local ind = 0
-		for _, v in categories do
-			if v.Object.Visible then
-				v.Object.Position = UDim2.fromOffset(6 + (ind % 8 * 230), 60 + (ind > 7 and 360 or 0))
-				ind += 1
-			end
-		end
-	end,
-	Tooltip = 'Sorts GUI'
-})
-
---[[
-	Notification Settings
-]]
-
-local notifpane = mainapi.Categories.Main:CreateSettingsPane({Name = 'Notifications'})
+local notifpane = mainapi.Categories.Main:CreateSettingsPane('Notifications')
 mainapi.Notifications = notifpane:CreateToggle({
 	Name = 'Notifications',
 	Function = function(enabled)
@@ -6676,15 +4861,10 @@ mainapi.GUIColor = mainapi.Categories.Main:CreateGUISlider({
 })
 mainapi.Categories.Main:CreateBind()
 
---[[
-	Text GUI
-]]
-
 local textgui = mainapi:CreateOverlay({
 	Name = 'Text GUI',
 	Icon = getcustomasset('skidv5/assets/new/textguiicon.png'),
 	Size = UDim2.fromOffset(16, 12),
-	Position = UDim2.fromOffset(12, 14),
 	Function = function()
 		mainapi:UpdateTextGUI()
 	end
@@ -6720,8 +4900,8 @@ textguicolor = textgui:CreateColorSlider({
 	Darker = true,
 	Visible = false
 })
-local VapeTextScale = Instance.new('UIScale')
-VapeTextScale.Parent = textgui.Children
+local textguiscaleobj = Instance.new('UIScale')
+textguiscaleobj.Parent = textgui.Children
 local textguiscale = textgui:CreateSlider({
 	Name = 'Scale',
 	Min = 0,
@@ -6729,7 +4909,7 @@ local textguiscale = textgui:CreateSlider({
 	Decimal = 10,
 	Default = 1,
 	Function = function(val)
-		VapeTextScale.Scale = val
+		textguiscaleobj.Scale = val
 		mainapi:UpdateTextGUI()
 	end
 })
@@ -6881,22 +5061,28 @@ textguicolorcustom = textgui:CreateColorSlider({
 	Visible = false
 })
 
---[[
-	Text GUI Objects
-]]
-
-local VapeLabels = {}
-local VapeLogo = Instance.new('ImageLabel')
-VapeLogo.Name = 'Logo'
-VapeLogo.Size = UDim2.fromOffset(80, 21)
-VapeLogo.Position = UDim2.new(1, -142, 0, 3)
-VapeLogo.BackgroundTransparency = 1
-VapeLogo.BorderSizePixel = 0
-VapeLogo.Visible = false
-VapeLogo.BackgroundColor3 = Color3.new()
-VapeLogo.Image = getcustomasset('skidv5/assets/new/textvape.png')
-VapeLogo.Parent = textgui.Children
-
+local TextLabels = {}
+local TextWatermark = Instance.new('TextLabel')
+TextWatermark.Name = 'Watermark'
+TextWatermark.Size = UDim2.fromOffset(100, 21)
+TextWatermark.Position = UDim2.new(1, -142, 0, 3)
+TextWatermark.BackgroundTransparency = 1
+TextWatermark.BorderSizePixel = 0
+TextWatermark.Visible = false
+TextWatermark.Text = 'SKIDV5 LITE'
+TextWatermark.TextSize = 15
+TextWatermark.FontFace = uipallet.FontSemiBold
+TextWatermark.Parent = textgui.Children
+local TextWatermarkShadow = TextWatermark:Clone()
+TextWatermarkShadow.Position = UDim2.fromOffset(1, 1)
+TextWatermarkShadow.ZIndex = 0
+TextWatermarkShadow.Visible = true
+TextWatermarkShadow.TextColor3 = Color3.new()
+TextWatermarkShadow.TextTransparency = 0.65
+TextWatermarkShadow.Parent = TextWatermark
+local TextWatermarkGradient = Instance.new('UIGradient')
+TextWatermarkGradient.Rotation = 90
+TextWatermarkGradient.Parent = TextWatermark
 local lastside = textgui.Children.AbsolutePosition.X > (gui.AbsoluteSize.X / 2)
 mainapi:Clean(textgui.Children:GetPropertyChangedSignal('AbsolutePosition'):Connect(function()
 	if mainapi.ThreadFix then
@@ -6908,78 +5094,43 @@ mainapi:Clean(textgui.Children:GetPropertyChangedSignal('AbsolutePosition'):Conn
 		mainapi:UpdateTextGUI()
 	end
 end))
-
-local VapeLogoV4 = Instance.new('ImageLabel')
-VapeLogoV4.Name = 'Logo2'
-VapeLogoV4.Size = UDim2.fromOffset(33, 18)
-VapeLogoV4.Position = UDim2.new(1, 1, 0, 1)
-VapeLogoV4.BackgroundColor3 = Color3.new()
-VapeLogoV4.BackgroundTransparency = 1
-VapeLogoV4.BorderSizePixel = 0
-VapeLogoV4.Image = getcustomasset('skidv5/assets/new/textv4.png')
-VapeLogoV4.Parent = VapeLogo
-local VapeLogoShadow = VapeLogo:Clone()
-VapeLogoShadow.Position = UDim2.fromOffset(1, 1)
-VapeLogoShadow.ZIndex = 0
-VapeLogoShadow.Visible = true
-VapeLogoShadow.ImageColor3 = Color3.new()
-VapeLogoShadow.ImageTransparency = 0.65
-VapeLogoShadow.Parent = VapeLogo
-VapeLogoShadow.Logo2.ZIndex = 0
-VapeLogoShadow.Logo2.ImageColor3 = Color3.new()
-VapeLogoShadow.Logo2.ImageTransparency = 0.65
-local VapeLogoGradient = Instance.new('UIGradient')
-VapeLogoGradient.Rotation = 90
-VapeLogoGradient.Parent = VapeLogo
-local VapeLogoGradient2 = Instance.new('UIGradient')
-VapeLogoGradient2.Rotation = 90
-VapeLogoGradient2.Parent = VapeLogoV4
-local VapeLabelCustom = Instance.new('TextLabel')
-VapeLabelCustom.Position = UDim2.fromOffset(5, 2)
-VapeLabelCustom.BackgroundTransparency = 1
-VapeLabelCustom.BorderSizePixel = 0
-VapeLabelCustom.Visible = false
-VapeLabelCustom.Text = ''
-VapeLabelCustom.TextSize = 25
-VapeLabelCustom.FontFace = textguifontcustom.Value
-VapeLabelCustom.RichText = true
-local VapeLabelCustomShadow = VapeLabelCustom:Clone()
-VapeLabelCustom:GetPropertyChangedSignal('Position'):Connect(function()
-	VapeLabelCustomShadow.Position = UDim2.new(
-		VapeLabelCustom.Position.X.Scale,
-		VapeLabelCustom.Position.X.Offset + 1,
-		0,
-		VapeLabelCustom.Position.Y.Offset + 1
-	)
+local TextCustom = Instance.new('TextLabel')
+TextCustom.Position = UDim2.fromOffset(5, 2)
+TextCustom.BackgroundTransparency = 1
+TextCustom.BorderSizePixel = 0
+TextCustom.Visible = false
+TextCustom.Text = ''
+TextCustom.TextSize = 25
+TextCustom.FontFace = textguifontcustom.Value
+TextCustom.RichText = true
+local TextCustomShadow = TextCustom:Clone()
+TextCustom:GetPropertyChangedSignal('Position'):Connect(function()
+	TextCustomShadow.Position = UDim2.new(TextCustom.Position.X.Scale, TextCustom.Position.X.Offset + 1, 0, TextCustom.Position.Y.Offset + 1)
 end)
-VapeLabelCustom:GetPropertyChangedSignal('FontFace'):Connect(function()
-	VapeLabelCustomShadow.FontFace = VapeLabelCustom.FontFace
+TextCustom:GetPropertyChangedSignal('FontFace'):Connect(function()
+	TextCustomShadow.FontFace = TextCustom.FontFace
 end)
-VapeLabelCustom:GetPropertyChangedSignal('Text'):Connect(function()
-	VapeLabelCustomShadow.Text = removeTags(VapeLabelCustom.Text)
+TextCustom:GetPropertyChangedSignal('Text'):Connect(function()
+	TextCustomShadow.Text = removeTags(TextCustom.Text)
 end)
-VapeLabelCustom:GetPropertyChangedSignal('Size'):Connect(function()
-	VapeLabelCustomShadow.Size = VapeLabelCustom.Size
+TextCustom:GetPropertyChangedSignal('Size'):Connect(function()
+	TextCustomShadow.Size = TextCustom.Size
 end)
-VapeLabelCustomShadow.TextColor3 = Color3.new()
-VapeLabelCustomShadow.TextTransparency = 0.65
-VapeLabelCustomShadow.Parent = textgui.Children
-VapeLabelCustom.Parent = textgui.Children
-local VapeLabelHolder = Instance.new('Frame')
-VapeLabelHolder.Name = 'Holder'
-VapeLabelHolder.Size = UDim2.fromScale(1, 1)
-VapeLabelHolder.Position = UDim2.fromOffset(5, 37)
-VapeLabelHolder.BackgroundTransparency = 1
-VapeLabelHolder.Parent = textgui.Children
-local VapeLabelSorter = Instance.new('UIListLayout')
-VapeLabelSorter.HorizontalAlignment = Enum.HorizontalAlignment.Right
-VapeLabelSorter.VerticalAlignment = Enum.VerticalAlignment.Top
-VapeLabelSorter.SortOrder = Enum.SortOrder.LayoutOrder
-VapeLabelSorter.Parent = VapeLabelHolder
-
---[[
-	Target Info
-]]
+TextCustomShadow.TextColor3 = Color3.new()
+TextCustomShadow.TextTransparency = 0.65
+TextCustomShadow.Parent = textgui.Children
+TextCustom.Parent = textgui.Children
+local TextHolder = Instance.new('Frame')
+TextHolder.Name = 'Holder'
+TextHolder.Size = UDim2.fromScale(1, 1)
+TextHolder.Position = UDim2.fromOffset(5, 37)
+TextHolder.BackgroundTransparency = 1
+TextHolder.Parent = textgui.Children
+local TextSorter = Instance.new('UIListLayout')
+TextSorter.HorizontalAlignment = Enum.HorizontalAlignment.Right
+TextSorter.VerticalAlignment = Enum.VerticalAlignment.Top
+TextSorter.SortOrder = Enum.SortOrder.LayoutOrder
+TextSorter.Parent = TextHolder
 
 local targetinfo
 local targetinfoobj
@@ -6988,7 +5139,6 @@ targetinfoobj = mainapi:CreateOverlay({
 	Name = 'Target Info',
 	Icon = getcustomasset('skidv5/assets/new/targetinfoicon.png'),
 	Size = UDim2.fromOffset(14, 14),
-	Position = UDim2.fromOffset(12, 14),
 	CategorySize = 240,
 	Function = function(callback)
 		if callback then
@@ -7001,9 +5151,7 @@ targetinfoobj = mainapi:CreateOverlay({
 		end
 	end
 })
-
 local targetinfobkg = Instance.new('Frame')
-targetinfobkg.Name = 'TargetInfoContainer'
 targetinfobkg.Size = UDim2.fromOffset(240, 89)
 targetinfobkg.BackgroundColor3 = color.Dark(uipallet.Main, 0.1)
 targetinfobkg.BackgroundTransparency = 0.5
@@ -7087,7 +5235,6 @@ local targetinfob = Instance.new('UIStroke')
 targetinfob.Enabled = false
 targetinfob.Color = Color3.fromHSV(0.44, 1, 1)
 targetinfob.Parent = targetinfobkg
-
 targetinfoobj:CreateFont({
 	Name = 'Font',
 	Blacklist = 'Arial',
@@ -7170,7 +5317,6 @@ targetinfobcolor = targetinfoobj:CreateColorSlider({
 	Darker = true,
 	Visible = false
 })
-
 local lasthealth = 0
 local lastmaxhealth = 0
 targetinfo = {
@@ -7207,7 +5353,8 @@ targetinfo = {
 			if v.Health ~= lasthealth or v.MaxHealth ~= lastmaxhealth then
 				local percent = math.max(v.Health / v.MaxHealth, 0)
 				tween:Tween(targetinfohealth, TweenInfo.new(0.3), {
-					Size = UDim2.fromScale(math.min(percent, 1), 1), BackgroundColor3 = Color3.fromHSV(math.clamp(percent / 2.5, 0, 1), 0.89, 0.75)
+					Size = UDim2.fromScale(math.min(percent, 1), 1),
+					BackgroundColor3 = Color3.fromHSV(math.clamp(percent / 2.5, 0, 1), 0.89, 0.75)
 				})
 				tween:Tween(targetinfohealthextra, TweenInfo.new(0.3), {
 					Size = UDim2.fromScale(math.clamp(percent - 1, 0, 0.8), 1)
@@ -7235,30 +5382,30 @@ function mainapi:UpdateTextGUI(afterload)
 	if not afterload and not mainapi.Loaded then return end
 	if textgui.Button.Enabled then
 		local right = textgui.Children.AbsolutePosition.X > (gui.AbsoluteSize.X / 2)
-		VapeLogo.Visible = textguiwatermark.Enabled
-		VapeLogo.Position = right and UDim2.new(1 / VapeTextScale.Scale, -113, 0, 6) or UDim2.fromOffset(0, 6)
-		VapeLogoShadow.Visible = textguishadow.Enabled
-		VapeLabelCustom.Text = textguibox.Value
-		VapeLabelCustom.FontFace = textguifontcustom.Value
-		VapeLabelCustom.Visible = VapeLabelCustom.Text ~= '' and textguitext.Enabled
-		VapeLabelCustomShadow.Visible = VapeLabelCustom.Visible and textguishadow.Enabled
-		VapeLabelSorter.HorizontalAlignment = right and Enum.HorizontalAlignment.Right or Enum.HorizontalAlignment.Left
-		VapeLabelHolder.Size = UDim2.fromScale(1 / VapeTextScale.Scale, 1)
-		VapeLabelHolder.Position = UDim2.fromOffset(right and 3 or 0, 11 + (VapeLogo.Visible and VapeLogo.Size.Y.Offset or 0) + (VapeLabelCustom.Visible and 28 or 0) + (textguibackground.Enabled and 3 or 0))
-		if VapeLabelCustom.Visible then
-			local size = getfontsize(removeTags(VapeLabelCustom.Text), VapeLabelCustom.TextSize, VapeLabelCustom.FontFace)
-			VapeLabelCustom.Size = UDim2.fromOffset(size.X, size.Y)
-			VapeLabelCustom.Position = UDim2.new(right and 1 / VapeTextScale.Scale or 0, right and -size.X or 0, 0, (VapeLogo.Visible and 32 or 8))
+		TextWatermark.Visible = textguiwatermark.Enabled
+		TextWatermark.Position = right and UDim2.new(1 / textguiscaleobj.Scale, -113, 0, 6) or UDim2.fromOffset(0, 6)
+		TextWatermarkShadow.Visible = TextWatermark.Visible and textguishadow.Enabled
+		TextCustom.Text = textguibox.Value
+		TextCustom.FontFace = textguifontcustom.Value
+		TextCustom.Visible = TextCustom.Text ~= '' and textguitext.Enabled
+		TextCustomShadow.Visible = TextCustom.Visible and textguishadow.Enabled
+		TextSorter.HorizontalAlignment = right and Enum.HorizontalAlignment.Right or Enum.HorizontalAlignment.Left
+		TextHolder.Size = UDim2.fromScale(1 / textguiscaleobj.Scale, 1)
+		TextHolder.Position = UDim2.fromOffset(right and 3 or 0, 11 + (TextWatermark.Visible and TextWatermark.Size.Y.Offset or 0) + (TextCustom.Visible and 28 or 0) + (textguibackground.Enabled and 3 or 0))
+		if TextCustom.Visible then
+			local size = getfontsize(removeTags(TextCustom.Text), TextCustom.TextSize, TextCustom.FontFace)
+			TextCustom.Size = UDim2.fromOffset(size.X, size.Y)
+			TextCustom.Position = UDim2.new(right and 1 / textguiscaleobj.Scale or 0, right and -size.X or 0, 0, (TextWatermark.Visible and 32 or 8))
 		end
 
 		local found = {}
-		for _, v in VapeLabels do
+		for _, v in TextLabels do
 			if v.Enabled then
 				table.insert(found, v.Object.Name)
 			end
 			v.Object:Destroy()
 		end
-		table.clear(VapeLabels)
+		table.clear(TextLabels)
 
 		local info = TweenInfo.new(0.3, Enum.EasingStyle.Exponential)
 		for i, v in mainapi.Modules do
@@ -7270,7 +5417,7 @@ function mainapi:UpdateTextGUI(afterload)
 				holder.Size = UDim2.fromOffset()
 				holder.BackgroundTransparency = 1
 				holder.ClipsDescendants = true
-				holder.Parent = VapeLabelHolder
+				holder.Parent = TextHolder
 				local holderbackground
 				local holdercolorline
 				if textguibackground.Enabled then
@@ -7332,7 +5479,7 @@ function mainapi:UpdateTextGUI(afterload)
 				else
 					holder.Size = v.Enabled and holdersize or UDim2.fromOffset()
 				end
-				table.insert(VapeLabels, {
+				table.insert(TextLabels, {
 					Object = holder,
 					Text = holdertext,
 					Background = holderbackground,
@@ -7343,16 +5490,16 @@ function mainapi:UpdateTextGUI(afterload)
 		end
 
 		if textguisort.Value == 'Alphabetical' then
-			table.sort(VapeLabels, function(a, b)
+			table.sort(TextLabels, function(a, b)
 				return a.Text.Text < b.Text.Text
 			end)
 		else
-			table.sort(VapeLabels, function(a, b)
+			table.sort(TextLabels, function(a, b)
 				return a.Text.Size.X.Offset > b.Text.Size.X.Offset
 			end)
 		end
 
-		for i, v in VapeLabels do
+		for i, v in TextLabels do
 			if v.Color then
 				v.Color.Parent.Line.Visible = i ~= 1
 			end
@@ -7367,19 +5514,15 @@ function mainapi:UpdateGUI(hue, sat, val, default)
 	if mainapi.Loaded == nil then return end
 	if not default and mainapi.GUIColor.Rainbow then return end
 	if textgui.Button.Enabled then
-		VapeLogoGradient.Color = ColorSequence.new({
+		TextWatermarkGradient.Color = ColorSequence.new({
 			ColorSequenceKeypoint.new(0, Color3.fromHSV(hue, sat, val)),
 			ColorSequenceKeypoint.new(1, textguigradient.Enabled and Color3.fromHSV(mainapi:Color((hue - 0.075) % 1)) or Color3.fromHSV(hue, sat, val))
 		})
-		VapeLogoGradient2.Color = textguigradient.Enabled and textguigradientv4.Enabled and VapeLogoGradient.Color or ColorSequence.new({
-			ColorSequenceKeypoint.new(0, Color3.new(1, 1, 1)),
-			ColorSequenceKeypoint.new(1, Color3.new(1, 1, 1))
-		})
-		VapeLabelCustom.TextColor3 = textguicolorcustomtoggle.Enabled and Color3.fromHSV(textguicolorcustom.Hue, textguicolorcustom.Sat, textguicolorcustom.Value) or VapeLogoGradient.Color.Keypoints[2].Value
+		TextCustom.TextColor3 = textguicolorcustomtoggle.Enabled and Color3.fromHSV(textguicolorcustom.Hue, textguicolorcustom.Sat, textguicolorcustom.Value) or TextWatermarkGradient.Color.Keypoints[2].Value
 
 		local customcolor = textguicolordrop.Value == 'Custom color' and Color3.fromHSV(textguicolor.Hue, textguicolor.Sat, textguicolor.Value) or nil
-		for i, v in VapeLabels do
-			v.Text.TextColor3 = customcolor or (mainapi.GUIColor.Rainbow and Color3.fromHSV(mainapi:Color((hue - ((textguigradient and i + 2 or i) * 0.025)) % 1)) or VapeLogoGradient.Color.Keypoints[2].Value)
+		for i, v in TextLabels do
+			v.Text.TextColor3 = customcolor or (mainapi.GUIColor.Rainbow and Color3.fromHSV(mainapi:Color((hue - ((i + 2) * 0.025)) % 1)) or TextWatermarkGradient.Color.Keypoints[2].Value)
 			if v.Color then
 				v.Color.BackgroundColor3 = v.Text.TextColor3
 			end
@@ -7390,24 +5533,17 @@ function mainapi:UpdateGUI(hue, sat, val, default)
 	end
 
 	if not clickgui.Visible and not mainapi.Legit.Window.Visible then return end
-	local rainbow = mainapi.GUIColor.Rainbow and mainapi.RainbowMode.Value ~= 'Retro'
-
-	-- The Profiles cards are built inside their own do-block and were only recoloured when
-	-- something poked them (a load, or the mouse entering the row), so with the GUI colour on
-	-- rainbow the sync button and the equipped-config highlight sat frozen at whatever hue
-	-- happened to be current at the time while everything around them cycled.
-	if mainapi.RecolorProfileCards then
-		mainapi.RecolorProfileCards()
-	end
+	local rainbow = mainapi.GUIColor.Rainbow
 
 	for i, v in mainapi.Categories do
 		if i == 'Main' then
-			v.Object.VapeLogo.V4Logo.ImageColor3 = Color3.fromHSV(hue, sat, val)
+			v.Object.Header.Title.TextColor3 = Color3.fromHSV(hue, sat, val)
 			for _, button in v.Buttons do
 				if button.Enabled then
-					button.Object.TextColor3 = rainbow and Color3.fromHSV(mainapi:Color((hue - (button.Index * 0.025)) % 1)) or Color3.fromHSV(hue, sat, val)
+					button.Object.Title.TextColor3 = rainbow and Color3.fromHSV(mainapi:Color((hue - (button.Index * 0.025)) % 1)) or Color3.fromHSV(hue, sat, val)
+					button.Object.Highlight.BackgroundColor3 = button.Object.Title.TextColor3
 					if button.Icon then
-						button.Icon.ImageColor3 = button.Object.TextColor3
+						button.Icon.ImageColor3 = button.Object.Title.TextColor3
 					end
 				end
 			end
@@ -7424,11 +5560,9 @@ function mainapi:UpdateGUI(hue, sat, val, default)
 		if v.Type == 'CategoryList' then
 			v.Object.Children.Add.AddButton.ImageColor3 = rainbow and Color3.fromHSV(mainapi:Color(hue % 1)) or Color3.fromHSV(hue, sat, val)
 			if v.Selected then
-				v.Selected.BackgroundColor3 = rainbow and Color3.fromHSV(mainapi:Color(hue % 1)) or Color3.fromHSV(hue, sat, val)
-				v.Selected.Title.TextColor3 = mainapi.GUIColor.Rainbow and Color3.new(0.19, 0.19, 0.19) or mainapi:TextColor(hue, sat, val)
-				v.Selected.Dots.Dots.ImageColor3 = v.Selected.Title.TextColor3
-				v.Selected.Bind.Icon.ImageColor3 = v.Selected.Title.TextColor3
-				v.Selected.Bind.TextLabel.TextColor3 = v.Selected.Title.TextColor3
+				v.Selected.Object.BackgroundColor3 = rainbow and Color3.fromHSV(mainapi:Color(hue % 1)) or Color3.fromHSV(hue, sat, val)
+				v.Selected.Object.Title.TextColor3 = mainapi.GUIColor.Rainbow and Color3.new(0.19, 0.19, 0.19) or mainapi:TextColor(hue, sat, val)
+				v.Selected.Object.Dots.Dots.ImageColor3 = v.Selected.Object.Title.TextColor3
 			end
 		end
 	end
@@ -7437,13 +5571,10 @@ function mainapi:UpdateGUI(hue, sat, val, default)
 		if button.Enabled then
 			button.Object.BackgroundColor3 = rainbow and Color3.fromHSV(mainapi:Color((hue - (button.Index * 0.025)) % 1)) or Color3.fromHSV(hue, sat, val)
 			button.Object.TextColor3 = mainapi.GUIColor.Rainbow and Color3.new(0.19, 0.19, 0.19) or mainapi:TextColor(hue, sat, val)
-			button.Object.UIGradient.Enabled = rainbow and mainapi.RainbowMode.Value == 'Gradient'
-			if button.Object.UIGradient.Enabled then
-				button.Object.BackgroundColor3 = Color3.new(1, 1, 1)
-				button.Object.UIGradient.Color = ColorSequence.new({
-					ColorSequenceKeypoint.new(0, Color3.fromHSV(mainapi:Color((hue - (button.Index * 0.025)) % 1))),
-					ColorSequenceKeypoint.new(1, Color3.fromHSV(mainapi:Color((hue - ((button.Index + 1) * 0.025)) % 1)))
-				})
+			button.Object.UIGradient.Enabled = false
+			local namelabel = button.Object:FindFirstChildOfClass('TextLabel')
+			if namelabel then
+				namelabel.TextColor3 = button.Object.TextColor3
 			end
 			button.Object.Bind.Icon.ImageColor3 = button.Object.TextColor3
 			button.Object.Bind.TextLabel.TextColor3 = button.Object.TextColor3
@@ -7459,7 +5590,6 @@ function mainapi:UpdateGUI(hue, sat, val, default)
 
 	for i, v in mainapi.Overlays.Toggles do
 		if v.Enabled then
-			tween:Cancel(v.Object.Knob)
 			v.Object.Knob.BackgroundColor3 = rainbow and Color3.fromHSV(mainapi:Color((hue - (i * 0.075)) % 1)) or Color3.fromHSV(hue, sat, val)
 		end
 	end
@@ -7471,8 +5601,11 @@ function mainapi:UpdateGUI(hue, sat, val, default)
 	if mainapi.Legit.Window.Visible then
 		for _, v in mainapi.Legit.Modules do
 			if v.Enabled then
-				tween:Cancel(v.Object.Knob)
-				v.Object.Knob.BackgroundColor3 = Color3.fromHSV(hue, sat, val)
+				v.Object.BackgroundColor3 = Color3.fromHSV(hue, sat, val)
+				v.Object.TextColor3 = mainapi:TextColor(hue, sat, val)
+				v.Object.Bind.Icon.ImageColor3 = v.Object.TextColor3
+				v.Object.Bind.TextLabel.TextColor3 = v.Object.TextColor3
+				v.Object.Dots.Dots.ImageColor3 = v.Object.TextColor3
 			end
 
 			for _, option in v.Options do
@@ -7483,16 +5616,6 @@ function mainapi:UpdateGUI(hue, sat, val, default)
 		end
 	end
 end
-
-mainapi:Clean(notifications.ChildRemoved:Connect(function()
-	for i, v in notifications:GetChildren() do
-		if tween.Tween then
-			tween:Tween(v, TweenInfo.new(0.4, Enum.EasingStyle.Exponential), {
-				Position = UDim2.new(1, 0, 1, -(29 + (78 * i)))
-			})
-		end
-	end
-end))
 
 mainapi:Clean(inputService.InputBegan:Connect(function(inputObj)
 	if not inputService:GetFocusedTextBox() and inputObj.KeyCode ~= Enum.KeyCode.Unknown then

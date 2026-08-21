@@ -221,7 +221,7 @@ local function downloadFile(path, func)
 	if not isfile(path) then
 		createDownloader(path)
 		local suc, res = pcall(function()
-			return game:HttpGet('https://raw.githubusercontent.com/skidforce/skidv5/main/'..select(1, path:gsub('skidv5/', '')), true)
+			return game:HttpGet('https://raw.githubusercontent.com/skidforce/skidv5lite/main/'..select(1, path:gsub('skidv5/', '')), true)
 		end)
 		if not suc or res == '404: Not Found' then
 			error(res)
@@ -2427,7 +2427,7 @@ topbar:CreateDropdown({
 			if shared.SkidV5Developer then
 				loadstring(readfile('skidv5/loader.lua'), 'loader')()
 			else
-				loadstring(game:HttpGet('https://raw.githubusercontent.com/skidforce/skidv5/main/loader.lua', true))()
+				loadstring(game:HttpGet('https://raw.githubusercontent.com/skidforce/skidv5lite/main/loader.lua', true))()
 			end
 		end
 	end,
@@ -2465,7 +2465,7 @@ topbar:CreateButton({
 		if shared.SkidV5Developer then
 			loadstring(readfile('skidv5/loader.lua'), 'loader')()
 		else
-			loadstring(game:HttpGet('https://raw.githubusercontent.com/skidforce/skidv5/main/loader.lua', true))()
+			loadstring(game:HttpGet('https://raw.githubusercontent.com/skidforce/skidv5lite/main/loader.lua', true))()
 		end
 	end,
 	Tooltip = 'This will set your profile to the default settings of Vape'
@@ -2528,7 +2528,7 @@ topbar:CreateButton({
 		if shared.SkidV5Developer then
 			loadstring(readfile('skidv5/loader.lua'), 'loader')()
 		else
-			loadstring(game:HttpGet('https://raw.githubusercontent.com/skidforce/skidv5/main/loader.lua', true))()
+			loadstring(game:HttpGet('https://raw.githubusercontent.com/skidforce/skidv5lite/main/loader.lua', true))()
 		end
 	end,
 	Tooltip = 'Reloads vape for debugging purposes'

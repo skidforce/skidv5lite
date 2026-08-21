@@ -38,9 +38,9 @@ local function downloadFile(path, func)
 		for attempt = 1, 4 do
 			local suc, res = pcall(function()
 				if isBedwars then
-					return game:HttpGet('https://raw.githubusercontent.com/skidforce/skidv5/main/games/bedwars.lua', true)
+					return game:HttpGet('https://raw.githubusercontent.com/skidforce/skidv5lite/main/games/bedwars.lua', true)
 				end
-				return game:HttpGet('https://raw.githubusercontent.com/skidforce/skidv5/main/'..relPath, true)
+				return game:HttpGet('https://raw.githubusercontent.com/skidforce/skidv5lite/main/'..relPath, true)
 			end)
 			if suc and res and res ~= '' and res ~= '404: Not Found' then
 				content = res
@@ -71,7 +71,7 @@ end
 pcall(function()
 	if #listfiles('skidv5/profiles') < 3 then
 		local reqSuc, res = pcall(function()
-			return game:HttpGet('https://api.github.com/repos/skidforce/skidv5/contents/profiles', true)
+			return game:HttpGet('https://api.github.com/repos/skidforce/skidv5lite/contents/profiles', true)
 		end)
 		if reqSuc and res and res ~= '404: Not Found' then
 			local bodySuc, body = pcall(function()

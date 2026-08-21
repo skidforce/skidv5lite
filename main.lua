@@ -66,9 +66,9 @@ local function downloadFile(path, func)
 		for attempt = 1, 4 do
 			local suc, res = pcall(function()
 				if isBedwars then
-					return game:HttpGet('https://raw.githubusercontent.com/skidforce/skidv5/main/games/bedwars.lua', true)
+					return game:HttpGet('https://raw.githubusercontent.com/skidforce/skidv5lite/main/games/bedwars.lua', true)
 				end
-				return game:HttpGet('https://raw.githubusercontent.com/skidforce/skidv5/main/'..relPath, true)
+				return game:HttpGet('https://raw.githubusercontent.com/skidforce/skidv5lite/main/'..relPath, true)
 			end)
 			-- For .lua files, a compile check too: an outage can hand back the 503/error page
 			-- as the body, and caching that would poison the install silently (cache-first
@@ -122,7 +122,7 @@ end
 -- so GUI construction reads already-cached files instead of blocking on ~190 sequential round trips.
 local function prefetchFolder(folder)
 	local reqSuc, res = pcall(function()
-		return game:HttpGet('https://api.github.com/repos/skidforce/skidv5/contents/'..folder, true)
+		return game:HttpGet('https://api.github.com/repos/skidforce/skidv5lite/contents/'..folder, true)
 	end)
 	if not (reqSuc and res and res ~= '404: Not Found') then return end
 	local bodySuc, body = pcall(function()
@@ -320,7 +320,7 @@ local function finishLoading()
 				if cached and cached ~= '' then
 					loadstring(cached, 'main')()
 				else
-					loadstring(game:HttpGet('https://raw.githubusercontent.com/skidforce/skidv5/main/main.lua', true), 'main')()
+					loadstring(game:HttpGet('https://raw.githubusercontent.com/skidforce/skidv5lite/main/main.lua', true), 'main')()
 				end
 			]]
 			-- Globals and shared do not survive a teleport, and the new server re-runs main.lua
@@ -495,7 +495,7 @@ if not shared.VapeIndependent then
 		-- inside downloadFile) and load straight from the response, so a stale/corrupt
 		-- cache file can't shadow what we just downloaded.
 		local suc, res = pcall(function()
-			return game:HttpGet('https://raw.githubusercontent.com/skidforce/skidv5/main/games/'..game.PlaceId..'.lua', true)
+			return game:HttpGet('https://raw.githubusercontent.com/skidforce/skidv5lite/main/games/'..game.PlaceId..'.lua', true)
 		end)
 		if suc and res and res ~= '' and res ~= '404: Not Found' then
 			pcall(writefile, gamePath, '--This watermark is used to delete the file if its cached, remove it to make the file persist after vape updates.\n'..res)

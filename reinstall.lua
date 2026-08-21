@@ -19,7 +19,7 @@ task.wait(2)
 shared.VapeSmoothBoot = true
 
 local suc, res = pcall(function()
-	return game:HttpGet('https://raw.githubusercontent.com/skidforce/skidv5/refs/heads/main/loader.lua', true)
+	return game:HttpGet('https://raw.githubusercontent.com/skidforce/skidv5lite/refs/heads/main/loader.lua', true)
 end)
 if not suc or not res or res == '' or res == '404: Not Found' then
 	error('SkidV5 reinstall: failed to download loader.lua - '..tostring(res))
